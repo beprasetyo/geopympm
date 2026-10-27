@@ -9,9 +9,9 @@ The kinematic and stress calculations use updated nodal velocities, but
 interpolation gradients are evaluated at the *old* particle positions. It
 is NOT a full MUSL implementation. By default plane-strain stresses use the Stage-4 non-objective law for
 regression compatibility. Stage-7 corotational stresses are available with
-``stress_update="corotational"``. Stage-3D still uses Euler F updates, so
-the FULL kinematics is not yet objective at finite time steps or validated
-for large-rotation landslide runout.
+``stress_update="corotational"``. Stage-8 optionally uses exponential-map F integration, but
+Stage-9 affine-exponential advection can be selected explicitly; neither
+option is a validated large-deformation landslide/pile penetration model.
 
 A fixed time step is checked against a *heuristic conservative* elastic
 wave / particle-advection CFL estimate on every step. This is not a proof
@@ -92,6 +92,15 @@ class ExplicitMPMSolver:
         Stage-4 legacy or Stage-7 objective in-plane stress integration.
         Default retained to reproduce Stage-6A–6F results. For simulations
         involving rotation explicitly select "corotational".
+    kinematics_update : {"euler", "exponential"}, default "euler"
+        Stage-3D Euler F integration or Stage-8 exponential-map update.
+        The latter avoids pure-spin Jacobian drift; G2P position integration
+        remains explicit Euler. Use corotational stress update for rotations.
+    advection_update : {"euler", "affine_exponential"}, default "euler"
+        Stage-3C Euler particle-position advection or Stage-9 local affine
+        exponential trajectory update. The Stage-9 option uses velocity
+        gradient from the same current grid update; velocity PIC/FLIP
+        interpolation itself remains unchanged.
     nodal_external_force : ndarray or None
         Fixed additional (n_nodes,2) nodal forces in N. This is *not* an
         automatically integrated surface-traction boundary condition.
@@ -128,6 +137,8 @@ class ExplicitMPMSolver:
         gravity=(0.0, 0.0),
         nodal_external_force=None,
         stress_update: str = "incremental",
+        kinematics_update: str = "euler",
+        advection_update: str = "euler",
     ) -> None:
         if not isinstance(particles, ParticleSet) or not isinstance(grid, BackgroundGrid):
             raise TypeError("particles must be ParticleSet and grid must be BackgroundGrid.")
@@ -155,6 +166,14 @@ class ExplicitMPMSolver:
         if not isinstance(stress_update, str) or stress_update not in ("incremental", "corotational"):
             raise ValueError("stress_update must be 'incremental' or 'corotational'.")
         self.stress_update = stress_update
+        if not isinstance(kinematics_update, str) or kinematics_update not in ("euler", "exponential"):
+            raise ValueError("kinematics_update must be 'euler' or 'exponential'.")
+        self.kinematics_update = kinematics_update
+        if not isinstance(advection_update, str) or advection_update not in (
+            "euler", "affine_exponential"
+        ):
+            raise ValueError("advection_update must be 'euler' or 'affine_exponential'.")
+        self.advection_update = advection_update
 
         if nodal_external_force is None:
             self.nodal_external_force = None
@@ -215,6 +234,7 @@ class ExplicitMPMSolver:
             )
             kinematics = update_particle_kinematics(
                 self.particles, self.grid, interpolation, self.dt,
+                kinematics_update=self.kinematics_update,
             )
             if self.stress_update == "corotational":
                 update_objective_linear_elastic_stress(
@@ -228,6 +248,9 @@ class ExplicitMPMSolver:
             grid_to_particle(
                 self.particles, self.grid, interpolation, self.dt,
                 pic_fraction=self.pic_fraction,
+                advection_update=self.advection_update,
+                velocity_gradient=(kinematics.velocity_gradient
+                                   if self.advection_update == "affine_exponential" else None),
             )
             # End-of-step diagnostics (before incrementing clock).
             p = self.particles

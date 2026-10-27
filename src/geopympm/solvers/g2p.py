@@ -4,7 +4,7 @@ Expected order for ONE kinematic substep:
     ip = evaluate_quad4(particles, grid)
     particle_to_grid(particles, grid, ip)            # Stage 3A
     update_grid_momentum(particles, grid, ip, dt, ...)  # Stage 3B
-    grid_to_particle(particles, grid, ip, dt, ...)   # Stage 3C
+    grid_to_particle(particles, grid, ip, dt, ...)   # Stage 3C / 9
 
 No deformation gradient, strain, volume, or stress update is performed here.
 This stage does not constitute a validated full explicit MPM solver.
@@ -18,6 +18,7 @@ from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
 from geopympm.kernels.g2p import g2p_quad4_kernel
+from geopympm.kernels.advection_exponential import affine_exponential_positions_kernel
 
 
 def grid_to_particle(
@@ -27,6 +28,8 @@ def grid_to_particle(
     dt: float,
     *,
     pic_fraction: float = 1.0,
+    advection_update: str = "euler",
+    velocity_gradient: np.ndarray | None = None,
 ) -> None:
     """Advance particle velocity and position from updated grid state.
 
@@ -45,10 +48,23 @@ def grid_to_particle(
         velocities. Particle position is ALWAYS advected with updated PIC
         grid velocity: x_new = x_old + dt * sum_i(N_i * v_i_new).
 
+    advection_update : {"euler", "affine_exponential"}, default "euler"
+        Euler reproduces Stage 3C. Affine-exponential integrates the locally
+        frozen affine nodal-velocity field via dt*phi1(dt*L)@v_PIC. This mode
+        requires ``velocity_gradient`` from the current Stage-3D result.
+        Particle velocity blending (PIC/FLIP) is unchanged.
+    velocity_gradient : ndarray or None
+        Current (n,2,2) velocity gradient from Stage 3D, required only for
+        affine-exponential position advection. Must match the updated grid
+        velocity and current interpolation gradients.
+
     Notes
     -----
     - FLIP increments use ``grid.acceleration`` from Stage 3B. As designed,
       these accelerations include enforcement of velocity BCs on grid nodes.
+    - With ``advection_update="euler"`` position uses Stage-3C updated PIC
+      velocity; with ``"affine_exponential"`` it uses the Stage-9 local
+      affine exponential trajectory. Both retain the PIC/FLIP velocity law.
     - Mass, volume, stress, strain, deformation gradient and domain_size
       are not changed here. Stress/volume evolution belongs to a later stage.
     - The next G2P/P2G step MUST evaluate a fresh interpolation after motion.
@@ -80,6 +96,11 @@ def grid_to_particle(
         raise ValueError("pic_fraction must be in [0, 1].") from exc
     if not np.isfinite(pic_fraction) or not (0.0 <= pic_fraction <= 1.0):
         raise ValueError("pic_fraction must be in [0, 1].")
+
+    if not isinstance(advection_update, str) or advection_update not in (
+        "euler", "affine_exponential"
+    ):
+        raise ValueError("advection_update must be 'euler' or 'affine_exponential'.")
 
     n = particles.n_particles
     ids = interpolation.node_ids
@@ -142,11 +163,31 @@ def grid_to_particle(
     if np.any((w > 0.0) & (grid.mass[ids] <= 0.0)):
         raise ValueError("Positive interpolation weights reference massless nodes.")
 
-    # Produce both updated arrays before committing either one.
+    # Compute candidates first; new advection mode may replace only position.
+    # Velocity PIC/FLIP formula remains identical in both modes.
     new_position, new_velocity = g2p_quad4_kernel(
         ids, w, particles.position, particles.velocity,
         grid.velocity, grid.acceleration, dt, pic_fraction,
     )
+    if advection_update == "affine_exponential":
+        if velocity_gradient is None:
+            raise ValueError("affine_exponential requires velocity_gradient from Stage 3D.")
+        L = np.asarray(velocity_gradient)
+        if (L.shape != (n, 2, 2) or L.dtype != np.float64 or
+                not np.all(np.isfinite(L))):
+            raise ValueError("velocity_gradient must be finite float64 (n,2,2).")
+        if (interpolation.gradients.shape != (n,4,2) or
+                not np.all(np.isfinite(interpolation.gradients))):
+            raise ValueError("Quad4 interpolation.gradients must be finite (n,4,2).")
+        expected_L = np.einsum(
+            "pai,paj->pij", grid.velocity[ids], interpolation.gradients,
+        )
+        if not np.allclose(L, expected_L, atol=1e-11, rtol=1e-11):
+            raise ValueError("velocity_gradient is inconsistent with current grid velocity.")
+        new_position = affine_exponential_positions_kernel(
+            ids, w, particles.position, grid.velocity,
+            np.ascontiguousarray(L), dt,
+        )
     if not np.all(np.isfinite(new_position)) or not np.all(np.isfinite(new_velocity)):
         raise ValueError("G2P created non-finite particle state; no changes committed.")
 

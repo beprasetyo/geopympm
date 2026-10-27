@@ -39,7 +39,9 @@ class RotationRun:
 
 
 def rigid_spin(*, stress_update: str = "corotational", dt: float = 0.001,
-               n_steps: int = 100, angular_speed: float = 3.0) -> RotationRun:
+               n_steps: int = 100, angular_speed: float = 3.0,
+               kinematics_update: str = "euler",
+               advection_update: str = "euler") -> RotationRun:
     """Full explicit-solver test with stress rotation but imposed nodal motion."""
     if stress_update not in ("incremental", "corotational"):
         raise ValueError("Invalid stress_update.")
@@ -62,10 +64,16 @@ def rigid_spin(*, stress_update: str = "corotational", dt: float = 0.001,
     grid.velocity_bc_value[:, 0] = -angular_speed * grid.node_coordinates[:, 1]
     grid.velocity_bc_value[:, 1] = angular_speed * grid.node_coordinates[:, 0]
     solver = ExplicitMPMSolver(p, grid, LinearElastic(50_000.0, 0.25), dt=dt,
-                               pic_fraction=1.0, stress_update=stress_update)
+                               pic_fraction=1.0, stress_update=stress_update,
+                               kinematics_update=kinematics_update,
+                               advection_update=advection_update)
     eye = np.eye(2)
     W = np.array([[0.0, -angular_speed], [angular_speed, 0.0]])
-    M = eye + dt*W
+    if advection_update == "affine_exponential":
+        ca,sa = cos(angular_speed*dt),sin(angular_speed*dt)
+        M = np.array([[ca,-sa],[sa,ca]])
+    else:
+        M = eye + dt*W
     discrete_reference = X.copy()
     history = []
     for k in range(1, n_steps+1):

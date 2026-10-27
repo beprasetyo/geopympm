@@ -1,0 +1,52 @@
+{
+  "title": "GeoPyMPM Stage 7 objective stress rotation verification",
+  "corotational": {
+    "name": "Stage 7 prescribed rigid spin (corotational)",
+    "passed": true,
+    "metrics": {
+      "stress_objectivity_error_pa": 8.242295734817162e-13,
+      "inplane_trace_error_pa": 9.805489753489383e-13,
+      "sigma_zz_error_pa": 1.6697754290362354e-13,
+      "strain_abs_max": 7.549516567451065e-18,
+      "discrete_position_error_m": 8.326672684688674e-17,
+      "final_angle_rad": 0.30000000000000004,
+      "continuum_position_error_end_m": 0.00020246959727904246,
+      "jacobian_final": 1.000900401067904,
+      "particles": 16,
+      "steps": 100
+    },
+    "thresholds": {
+      "stress_objectivity_error_pa": 1e-08,
+      "inplane_trace_error_pa": 1e-08,
+      "sigma_zz_error_pa": 1e-08,
+      "strain_abs_max": 1e-10,
+      "discrete_position_error_m": 1e-10
+    },
+    "notes": "All nodal velocities prescribed; verifies stress objectivity in a full solver step. Stage-3D F and G2P positions still use forward Euler, so J and continuum rotation trajectory drift by O(dt). A non-objective legacy comparison is expected NOT to pass."
+  },
+  "legacy_comparison": {
+    "name": "Stage 7 prescribed rigid spin (incremental)",
+    "passed": false,
+    "metrics": {
+      "stress_objectivity_error_pa": 37.42900051656876,
+      "inplane_trace_error_pa": 6.110667527536862e-13,
+      "sigma_zz_error_pa": 1.6697754290362354e-13,
+      "strain_abs_max": 7.549516567451065e-18,
+      "discrete_position_error_m": 8.326672684688674e-17,
+      "final_angle_rad": 0.30000000000000004,
+      "continuum_position_error_end_m": 0.00020246959727904246,
+      "jacobian_final": 1.000900401067904,
+      "particles": 16,
+      "steps": 100
+    },
+    "thresholds": {
+      "stress_objectivity_error_pa": 1e-08,
+      "inplane_trace_error_pa": 1e-08,
+      "sigma_zz_error_pa": 1e-08,
+      "strain_abs_max": 1e-10,
+      "discrete_position_error_m": 1e-10
+    },
+    "notes": "All nodal velocities prescribed; verifies stress objectivity in a full solver step. Stage-3D F and G2P positions still use forward Euler, so J and continuum rotation trajectory drift by O(dt). A non-objective legacy comparison is expected NOT to pass."
+  },
+  "passed": true
+}

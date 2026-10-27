@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "metrics": {
+    "euler_j_final": 1.000900401067904,
+    "exponential_j_final": 1.0000000000000013,
+    "euler_j_error_max": 0.0009004010679038998,
+    "exponential_j_error_max": 1.3322676295501878e-15,
+    "exponential_stress_error_pa": 8.242295734817162e-13,
+    "euler_position_error_end_m": 0.00020246959727904246,
+    "exponential_position_error_end_m": 0.00020246959727904246
+  },
+  "notes": "Prescribed rigid spin: F exponential preserves det(F)=1. Particle positions still use Stage-3C Euler, so continuum trajectory error does not improve. Diagnostic strain remains D*dt."
+}

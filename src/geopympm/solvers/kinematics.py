@@ -20,6 +20,7 @@ from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
 from geopympm.kernels.interpolation_quad4 import quad4_kernel
 from geopympm.kernels.kinematics import particle_kinematics_quad4_kernel
+from geopympm.kernels.kinematics_exponential import particle_kinematics_quad4_exponential_kernel
 
 
 @dataclass(slots=True)
@@ -42,10 +43,19 @@ def update_particle_kinematics(
     grid: BackgroundGrid,
     interpolation: Quad4Interpolation,
     dt: float,
+    *,
+    kinematics_update: str = "euler",
 ) -> KinematicsResult:
     """Integrate particle F, volume and diagnostic strain from updated grid v.
 
-    Scheme: F_(n+1) = (I + dt L_p) F_n, V_(n+1) = V_0 det(F_(n+1)),
+    ``kinematics_update="euler"`` retains the Stage-3D baseline.
+    ``kinematics_update="exponential"`` uses exp(dt*L)@F, avoiding artificial
+    Jacobian drift for rigid rotation at finite dt. Both modes use D*dt as
+    diagnostic strain, and neither changes the G2P position integration.
+
+    Euler mode: F_(n+1) = (I + dt L_p) F_n.
+    Exponential mode: F_(n+1) = exp(dt L_p) F_n.
+    Both use V_(n+1) = V_0 det(F_(n+1)),
     L_p = sum_i v_i^(n+1) tensor grad N_i(x_p^n).
 
     Uses 2D plane strain (out-of-plane stretch 1): F stored as (n,2,2),
@@ -58,9 +68,11 @@ def update_particle_kinematics(
       carry a time-step generation identifier to verify this automatically.
     - A nonpositive or nonfinite Jacobian raises ValueError WITHOUT changing
       particle state. A positive Jacobian alone does not guarantee accuracy.
-    - Forward Euler in F is only first-order and generates O(dt^2) drift
-      for a pure rigid rotation. This needs validation/upgrade for production
-      large-deformation simulations (e.g. an appropriate objective integrator).
+    - Euler F integration generates O(dt^2) Jacobian drift under rigid spin.
+      The optional exponential map eliminates this particular drift.
+    - Particle positions are still advanced with Stage-3C Euler G2P, and
+      accumulated strain remains a diagnostic rather than finite strain.
+      This is not by itself a complete large-deformation MPM formulation.
     """
     if not isinstance(particles, ParticleSet):
         raise TypeError("particles must be a ParticleSet.")
@@ -78,6 +90,9 @@ def update_particle_kinematics(
         raise ValueError("dt must be finite and strictly positive.") from exc
     if not np.isfinite(dt) or dt <= 0.0:
         raise ValueError("dt must be finite and strictly positive.")
+
+    if not isinstance(kinematics_update, str) or kinematics_update not in ("euler", "exponential"):
+        raise ValueError("kinematics_update must be 'euler' or 'exponential'.")
 
     n = particles.n_particles
     ids = interpolation.node_ids
@@ -151,7 +166,9 @@ def update_particle_kinematics(
     if not np.allclose(particles.volume, det_old * particles.volume0, rtol=1e-10, atol=1e-14):
         raise ValueError("Particle volume is inconsistent with det(F)*volume0.")
 
-    L, inc, new_F, J, new_volume, new_strain = particle_kinematics_quad4_kernel(
+    kernel = (particle_kinematics_quad4_exponential_kernel
+              if kinematics_update == "exponential" else particle_kinematics_quad4_kernel)
+    L, inc, new_F, J, new_volume, new_strain = kernel(
         ids, grad, grid.velocity, F, particles.volume0, particles.strain, dt,
     )
     if (not np.all(np.isfinite(L)) or not np.all(np.isfinite(inc)) or
