@@ -1,0 +1,130 @@
+{
+  "suite": "GeoPyMPM Stage 6D \u2014 standing longitudinal elastic wave",
+  "passed": true,
+  "primary_FLIP": {
+    "parameters": {
+      "L_m": 4.0,
+      "H_m": 0.5,
+      "nx": 32,
+      "ny": 2,
+      "particles_per_cell": 4,
+      "rho_kg_m3": 1200.0,
+      "E_pa": 120000.0,
+      "nu": 0.25,
+      "amplitude_m": 0.002,
+      "c_p_m_s": 10.954451150103322,
+      "angular_frequency_rad_s": 8.603605814318215,
+      "analytic_period_s": 0.7302967433402214,
+      "dt_s": 0.0005,
+      "t_end_s": 0.6,
+      "pic_fraction": 0.0
+    },
+    "benchmark": {
+      "name": "6D vibrating elastic bar PIC fraction=0",
+      "passed": true,
+      "metrics": {
+        "displacement_relative_l2_max": 0.0040898031696448185,
+        "velocity_relative_l2_max": 0.013156862593053533,
+        "stress_relative_l2_max": 0.0490879471431998,
+        "relative_period_error": 0.0008773345640868957,
+        "period_numerical_s": 0.7309374579151939,
+        "period_analytical_s": 0.7302967433402214,
+        "wave_speed_analytical_m_s": 10.954451150103322,
+        "energy_drift_abs_max": 0.0021860668308862127,
+        "energy_ratio_final": 1.0016192510750517,
+        "mass_relative_error": 0.0,
+        "max_internal_force_n": 56.63472610672107,
+        "min_jacobian": 0.9984274474647942,
+        "particles": 256,
+        "steps": 1200,
+        "pic_fraction": 0.0
+      },
+      "thresholds": {
+        "displacement_relative_l2_max": 0.03,
+        "velocity_relative_l2_max": 0.04,
+        "stress_relative_l2_max": 0.08,
+        "relative_period_error": 0.015,
+        "energy_drift_abs_max": 0.12,
+        "mass_relative_error": 1e-12
+      },
+      "notes": "Plane-strain longitudinal first mode, pre-stressed consistent initial state; only end x-velocity and all y-velocity constrained. FLIP=0 is verification baseline; PIC=1 expected to exhibit numerical damping. Energy estimate is small-strain modal diagnostic, not an exact discrete conservation proof."
+    }
+  },
+  "comparison_PIC": {
+    "parameters": {
+      "L_m": 4.0,
+      "H_m": 0.5,
+      "nx": 32,
+      "ny": 2,
+      "particles_per_cell": 4,
+      "rho_kg_m3": 1200.0,
+      "E_pa": 120000.0,
+      "nu": 0.25,
+      "amplitude_m": 0.002,
+      "c_p_m_s": 10.954451150103322,
+      "angular_frequency_rad_s": 8.603605814318215,
+      "analytic_period_s": 0.7302967433402214,
+      "dt_s": 0.0005,
+      "t_end_s": 0.6,
+      "pic_fraction": 1.0
+    },
+    "benchmark": {
+      "name": "6D vibrating elastic bar PIC fraction=1",
+      "passed": false,
+      "metrics": {
+        "displacement_relative_l2_max": 0.49461388512208193,
+        "velocity_relative_l2_max": 0.6235493158951061,
+        "stress_relative_l2_max": 0.49568549276692936,
+        "relative_period_error": 0.0216539129322193,
+        "period_numerical_s": 0.746110525435194,
+        "period_analytical_s": 0.7302967433402214,
+        "wave_speed_analytical_m_s": 10.954451150103322,
+        "energy_drift_abs_max": 0.8910139458641485,
+        "energy_ratio_final": 0.10898605413585151,
+        "mass_relative_error": 0.0,
+        "max_internal_force_n": 56.55210086909301,
+        "min_jacobian": 0.9984297055881107,
+        "particles": 256,
+        "steps": 1200,
+        "pic_fraction": 1.0
+      },
+      "thresholds": {
+        "displacement_relative_l2_max": 0.03,
+        "velocity_relative_l2_max": 0.04,
+        "stress_relative_l2_max": 0.08,
+        "relative_period_error": 0.015,
+        "energy_drift_abs_max": 0.12,
+        "mass_relative_error": 1e-12
+      },
+      "notes": "Plane-strain longitudinal first mode, pre-stressed consistent initial state; only end x-velocity and all y-velocity constrained. FLIP=0 is verification baseline; PIC=1 expected to exhibit numerical damping. Energy estimate is small-strain modal diagnostic, not an exact discrete conservation proof."
+    }
+  },
+  "joint_refinement": {
+    "passed": true,
+    "rows": [
+      {
+        "nx": 16,
+        "dt_s": 0.001,
+        "stress_relative_l2_max": 0.09820840662243135,
+        "displacement_relative_l2_max": 0.021928693422954105,
+        "velocity_relative_l2_max": 0.037480702294161804
+      },
+      {
+        "nx": 32,
+        "dt_s": 0.0005,
+        "stress_relative_l2_max": 0.0490879471431998,
+        "displacement_relative_l2_max": 0.0040898031696448185,
+        "velocity_relative_l2_max": 0.013156862593053533
+      },
+      {
+        "nx": 64,
+        "dt_s": 0.00025,
+        "stress_relative_l2_max": 0.024543393968332702,
+        "displacement_relative_l2_max": 0.0016103270124362763,
+        "velocity_relative_l2_max": 0.005075449693672787
+      }
+    ],
+    "notes": "Joint h,dt refinement only. Do not claim a spatial convergence order."
+  },
+  "interpretation": "PIC is intentionally not part of the PASS gate: dissipative PIC is compared against an undamped continuum reference."
+}

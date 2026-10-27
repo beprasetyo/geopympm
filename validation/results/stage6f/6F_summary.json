@@ -1,0 +1,145 @@
+{
+  "suite": "GeoPyMPM Stage 6F \u2014 Energy and Separated Convergence",
+  "passed": true,
+  "energy": {
+    "passed": true,
+    "metrics": {
+      "FLIP": {
+        "alpha": 0.0,
+        "initial_energy_j": 0.17765287921960843,
+        "final_energy_ratio": 1.0016192510750517,
+        "max_abs_energy_residual": 0.0021860668308862127,
+        "max_kinetic_energy_j": 0.17754286513524273,
+        "min_kinetic_energy_j": 0.0,
+        "min_elastic_energy_j": 0.0001075355075171677,
+        "n_steps": 1200
+      },
+      "BLEND_0p05": {
+        "alpha": 0.05,
+        "initial_energy_j": 0.17765287921960843,
+        "final_energy_ratio": 0.883147889357611,
+        "max_abs_energy_residual": 0.11685211064238898,
+        "max_kinetic_energy_j": 0.17135212809364309,
+        "min_kinetic_energy_j": 0.0,
+        "min_elastic_energy_j": 0.00011468478315755496,
+        "n_steps": 1200
+      },
+      "PIC": {
+        "alpha": 1.0,
+        "initial_energy_j": 0.17765287921960843,
+        "final_energy_ratio": 0.10898605413585151,
+        "max_abs_energy_residual": 0.8910139458641485,
+        "max_kinetic_energy_j": 0.09892415901934863,
+        "min_kinetic_energy_j": 0.0,
+        "min_elastic_energy_j": 0.00010701511971383163,
+        "n_steps": 1200
+      }
+    },
+    "notes": "Zero-work constrained elastic standing wave; K + small-strain elastic U. FLIP is the conservation-focused baseline. PIC/BLEND dissipation is an observed algorithm property, not physical damping. No exact discrete energy invariant is claimed."
+  },
+  "spatial": {
+    "passed": true,
+    "rows": [
+      {
+        "nx": 16,
+        "dx_m": 0.25,
+        "dt_s": 0.00025,
+        "n_steps": 1200,
+        "max_stress_l2_error": 0.09107772651164123,
+        "max_displacement_l2_error": 0.014771894536650454,
+        "max_velocity_l2_error": 0.03639629541519342,
+        "energy_drift_abs_max": 0.0010992258428308328
+      },
+      {
+        "nx": 32,
+        "dx_m": 0.125,
+        "dt_s": 0.00025,
+        "n_steps": 1200,
+        "max_stress_l2_error": 0.045354614791103434,
+        "max_displacement_l2_error": 0.0029372184985388657,
+        "max_velocity_l2_error": 0.013097082367299553,
+        "energy_drift_abs_max": 0.0010780589359289628
+      },
+      {
+        "nx": 64,
+        "dx_m": 0.0625,
+        "dt_s": 0.00025,
+        "n_steps": 1200,
+        "max_stress_l2_error": 0.02267064428119373,
+        "max_displacement_l2_error": 0.0013133894106712373,
+        "max_velocity_l2_error": 0.004675555030665081,
+        "energy_drift_abs_max": 0.0010744796563931826
+      }
+    ],
+    "orders": [
+      1.0058489281328806,
+      1.0004239592640853
+    ],
+    "notes": "Space refinement nx=16/32/64 at identical dt=0.00025s, ny=2, four particles/cell; observed rates apply only to this small-amplitude standing-wave benchmark. A fixed dt does not remove all temporal error; spatial dominance is checked empirically."
+  },
+  "temporal": {
+    "passed": true,
+    "rows": [
+      {
+        "nx": 32,
+        "dx_m": 0.125,
+        "dt_s": 0.002,
+        "reference_dt_s": 0.000125,
+        "n_steps": 150,
+        "final_displacement_relative_reference_error": 0.005082136575590484,
+        "final_stress_relative_reference_error": 0.005083329689872296,
+        "max_stress_l2_vs_continuum": 0.045411980646564175,
+        "self_difference_stress_pa_norm": 5.868281644226438
+      },
+      {
+        "nx": 32,
+        "dx_m": 0.125,
+        "dt_s": 0.001,
+        "reference_dt_s": 0.000125,
+        "n_steps": 300,
+        "final_displacement_relative_reference_error": 0.002367192461758081,
+        "final_stress_relative_reference_error": 0.0023744697888280638,
+        "max_stress_l2_vs_continuum": 0.04533552807943836,
+        "self_difference_stress_pa_norm": 2.930721833629814
+      },
+      {
+        "nx": 32,
+        "dx_m": 0.125,
+        "dt_s": 0.0005,
+        "reference_dt_s": 0.000125,
+        "n_steps": 600,
+        "final_displacement_relative_reference_error": 0.0010135658229710927,
+        "final_stress_relative_reference_error": 0.001021814532460151,
+        "max_stress_l2_vs_continuum": 0.04534089436897044,
+        "self_difference_stress_pa_norm": 1.4707782034922703
+      },
+      {
+        "nx": 32,
+        "dx_m": 0.125,
+        "dt_s": 0.00025,
+        "reference_dt_s": 0.000125,
+        "n_steps": 1200,
+        "final_displacement_relative_reference_error": 0.0003377008044936198,
+        "final_stress_relative_reference_error": 0.0003424409982346603,
+        "max_stress_l2_vs_continuum": 0.045354614791103434,
+        "self_difference_stress_pa_norm": null
+      }
+    ],
+    "orders": [
+      1.0016820712020602,
+      0.9946763411591271
+    ],
+    "notes": "Time refinement dt=.002/.001/.0005/.00025 s at fixed nx=32. Fine numerical reference dt=.000125s at same grid. Order inferred independently from successive stress-profile differences at identical final time."
+  },
+  "cfl": {
+    "passed": true,
+    "wave_speed_m_s": 10.954451150103322,
+    "dt_limit_s": 0.00285272165367274,
+    "accepted_dt_s": 0.0025674494883054662,
+    "rejected_dt_s": 0.002995357736356377,
+    "rejected": true,
+    "rejected_step_state_intact": true,
+    "notes": "Tests only Stage-5 heuristic CFL rejection and rollback; does not prove stability below its threshold."
+  },
+  "important_limitations": "No nonzero prescribed external work: energy is kinetic + small-strain elastic only for this constrained wave. No finite-rotation stress objectivity, contact or plasticity. CFL check is a heuristic, not a stability proof. Fixed dt spatial comparison retains temporal error; fine-step temporal reference is numerical."
+}

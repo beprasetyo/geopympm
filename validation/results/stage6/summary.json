@@ -1,0 +1,90 @@
+{
+  "suite": "GeoPyMPM Stage 6A\u20136C verification",
+  "solver": "Stage 5 integrated explicit, PIC=1.0 baseline, USL-like",
+  "cases": [
+    {
+      "name": "6A rigid translation",
+      "passed": true,
+      "metrics": {
+        "position_error": 5.10702591327572e-15,
+        "velocity_error": 4.440892098500626e-16,
+        "stress_abs_max": 3.880541721290598e-12,
+        "deformation_error": 1.0803857808383557e-16,
+        "mass_error": 0.0,
+        "momentum_error": 9.094947017729282e-13,
+        "crossing_particles": 24,
+        "particles": 24
+      },
+      "thresholds": {
+        "position_error": 1e-10,
+        "velocity_error": 1e-10,
+        "stress_abs_max": 1e-06,
+        "deformation_error": 1e-10,
+        "mass_error": 1e-09,
+        "momentum_error": 1e-08
+      },
+      "notes": "50 steps, PIC fraction=1; crossing_particles must be >0."
+    },
+    {
+      "name": "6B free fall dt=0.01",
+      "passed": true,
+      "metrics": {
+        "velocity_error": 4.440892098500626e-16,
+        "euler_position_error": 4.440892098500626e-15,
+        "strain_abs_max": 2.2707530300536405e-17,
+        "stress_abs_max": 4.631711680858075e-13,
+        "continuum_position_error_end": 0.009809999999999652,
+        "expected_continuum_error_end": 0.009810000000000001,
+        "dt": 0.01,
+        "n_steps": 20
+      },
+      "thresholds": {
+        "velocity_error": 1e-10,
+        "euler_position_error": 1e-10,
+        "strain_abs_max": 1e-10,
+        "stress_abs_max": 1e-06
+      },
+      "notes": "Updated-velocity Euler advection has O(dt) position error vs continuum."
+    },
+    {
+      "name": "6C affine elastic patch (kinematic)",
+      "passed": true,
+      "metrics": {
+        "stress_error": 2.546585164964199e-11,
+        "strain_error": 8.673617379884035e-19,
+        "deformation_error": 2.220446049250313e-16,
+        "volume_error": 5.551115123125783e-17,
+        "position_error": 2.220446049250313e-15,
+        "sigma_zz_expected_pa": -3999.999999999999,
+        "sigma_xy_expected_pa": 8000.0,
+        "particles": 48
+      },
+      "thresholds": {
+        "stress_error": 1e-06,
+        "strain_error": 1e-11,
+        "deformation_error": 1e-11,
+        "volume_error": 1e-11,
+        "position_error": 1e-11
+      },
+      "notes": "All nodal velocities are prescribed; no traction equilibrium or force-response verified."
+    }
+  ],
+  "free_fall_refinement": {
+    "passed": true,
+    "dt_values": [
+      0.02,
+      0.01,
+      0.005
+    ],
+    "errors": [
+      0.01961999999999975,
+      0.009809999999999652,
+      0.004905000000000159
+    ],
+    "observed_orders": [
+      1.0000000000000326,
+      0.999999999999902
+    ]
+  },
+  "passed": true
+}

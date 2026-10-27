@@ -1,0 +1,82 @@
+{
+  "suite": "GeoPyMPM Stage 6E \u2014 point-MPM cell-crossing transfer error",
+  "passed": true,
+  "probe": {
+    "name": "6E-1 single-particle gradient jump",
+    "passed": true,
+    "metrics": {
+      "left_force_n": -12.0,
+      "right_force_n": 12.0,
+      "signed_jump_n": 24.0,
+      "absolute_jump_n": 24.0,
+      "expected_signed_jump_n": 24.0,
+      "max_limit_error_n": 0.0,
+      "jump_error_n": 0.0
+    },
+    "thresholds": {
+      "max_limit_error_n": 2.4e-09,
+      "jump_error_n": 2.4e-09
+    },
+    "notes": "The discontinuity concerns one particle contribution to a grid node, not the continuum solution."
+  },
+  "primary_ppc4": {
+    "parameters": {
+      "particles_per_cell": 4,
+      "dt_s": 0.01,
+      "t_end_s": 1.5,
+      "block_length_m": 3.0,
+      "speed_m_s": 0.9,
+      "sigma_xx_pa": 120.0,
+      "target_node_x_m": 5.0,
+      "force_scale_n": 60.0
+    },
+    "benchmark": {
+      "name": "6E-2 moving prestressed block ppc=4",
+      "passed": true,
+      "metrics": {
+        "max_force_error_n": 7.500000000000014,
+        "normalized_max_force_error": 0.12500000000000025,
+        "normalized_rms_force_error": 0.0700130940134302,
+        "max_force_change_noise_n": 14.460000000000356,
+        "max_stress_drift_pa": 2.7284841053187847e-12,
+        "final_position_error_m": 5.062616992290714e-14,
+        "crossing_particles": 4,
+        "particles": 24,
+        "steps": 150
+      },
+      "thresholds": {
+        "normalized_max_force_error": 0.275,
+        "max_stress_drift_pa": 1e-07,
+        "final_position_error_m": 1e-10
+      },
+      "notes": "Fully prescribed uniform nodal velocity isolates force-assembly quadrature. Nonzero nodal force does not drive motion in this case; continuum force reference integrates identical spatially constant tensile stress."
+    }
+  },
+  "particle_refinement": {
+    "passed": true,
+    "rows": [
+      {
+        "particles_per_cell": 2,
+        "normalized_max_force_error": 0.2490000000000015,
+        "normalized_rms_force_error": 0.14403182518689145,
+        "max_force_change_noise_n": 29.460000000001216,
+        "particles": 12
+      },
+      {
+        "particles_per_cell": 4,
+        "normalized_max_force_error": 0.12500000000000025,
+        "normalized_rms_force_error": 0.0700130940134302,
+        "max_force_change_noise_n": 14.460000000000356,
+        "particles": 24
+      },
+      {
+        "particles_per_cell": 8,
+        "normalized_max_force_error": 0.06200000000000353,
+        "normalized_rms_force_error": 0.03583759664561004,
+        "max_force_change_noise_n": 6.960000000000353,
+        "particles": 48
+      }
+    ]
+  },
+  "scope": "Controlled prescribed-velocity motion with nonzero stress: verifies force-assembly sampling against continuum integral, NOT force-driven dynamics or GIMP."
+}

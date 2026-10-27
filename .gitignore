@@ -1,0 +1,27 @@
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build and distribution
+build/
+dist/
+
+# Test and compiler cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.nbc
+*.nbi
+
+# Coverage
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+
+# OS
+.DS_Store
