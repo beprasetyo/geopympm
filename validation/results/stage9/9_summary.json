@@ -1,0 +1,40 @@
+{
+  "suite": "GeoPyMPM Stage 9 - affine-exponential advection",
+  "passed": true,
+  "cases": [
+    {
+      "name": "9A prescribed rigid rotation",
+      "passed": true,
+      "metrics": {
+        "euler_position_error_end_m": 0.00020246959727904246,
+        "affine_exponential_position_error_end_m": 1.3877787807814457e-16,
+        "exp_j_error_max": 1.3322676295501878e-15,
+        "stress_error_max_pa": 8.952838470577262e-13,
+        "spin_angle_rad": 0.30000000000000004
+      },
+      "notes": "PIC nodal velocities imposed; updated particle stress uses corotational law. Rotational advection is checked against exact trajectory, not free dynamics."
+    },
+    {
+      "name": "9B stationary affine flow",
+      "passed": true,
+      "metrics": {
+        "position_error_m": 4.218847493575595e-15,
+        "F_error": 8.548717289613705e-15,
+        "volume_error": 8.847089727481716e-17,
+        "pic_fraction": 1.0
+      },
+      "notes": "Prescribed affine nodal velocity; independent augmented 3x3 exponential reference. Velocity PIC/FLIP treatment remains unchanged."
+    },
+    {
+      "name": "9B stationary affine flow",
+      "passed": true,
+      "metrics": {
+        "position_error_m": 4.218847493575595e-15,
+        "F_error": 8.548717289613705e-15,
+        "volume_error": 8.847089727481716e-17,
+        "pic_fraction": 0.0
+      },
+      "notes": "Prescribed affine nodal velocity; independent augmented 3x3 exponential reference. Velocity PIC/FLIP treatment remains unchanged."
+    }
+  ]
+}
