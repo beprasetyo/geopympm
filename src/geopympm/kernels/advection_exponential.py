@@ -71,7 +71,7 @@ def affine_exponential_positions_kernel(node_ids, weights, old_position,
     positions = np.empty((n, 2), dtype=np.float64)
     for p in range(n):
         vx = 0.0; vy = 0.0
-        for a in range(4):
+        for a in range(node_ids.shape[1]):
             i = node_ids[p,a]
             w = weights[p,a]
             vx += w*node_velocity[i,0]

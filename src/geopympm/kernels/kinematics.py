@@ -34,7 +34,7 @@ def particle_kinematics_quad4_kernel(node_ids, gradients, node_velocity,
         l10 = 0.0
         l11 = 0.0
 
-        for a in range(4):
+        for a in range(node_ids.shape[1]):
             i = node_ids[p, a]
             gx = gradients[p, a, 0]
             gy = gradients[p, a, 1]

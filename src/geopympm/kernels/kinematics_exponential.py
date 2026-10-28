@@ -59,7 +59,7 @@ def particle_kinematics_quad4_exponential_kernel(node_ids, gradients, node_veloc
 
     for p in range(n):
         l00 = l01 = l10 = l11 = 0.0
-        for a in range(4):
+        for a in range(node_ids.shape[1]):
             i = node_ids[p,a]
             gx = gradients[p,a,0]
             gy = gradients[p,a,1]

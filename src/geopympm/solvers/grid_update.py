@@ -5,7 +5,7 @@ computed for the CURRENT particle positions and uses the PRE-STEP projected
 nodal momentum. It does not move particles, perform G2P, or update stress.
 
 Gravity is spatially uniform; optional nodal forces are applied in addition.
-The supported grid and interpolation are 2D structured Quad4 only.
+The supported grid is 2D structured, with Quad4 or uGIMP interpolation.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import numpy as np
 from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
+from geopympm.interpolation.gimp import GIMPInterpolation, validate_current_gimp
 from geopympm.kernels.grid_update import (
     assemble_internal_force_quad4_kernel,
     explicit_grid_momentum_kernel,
@@ -24,7 +25,7 @@ from geopympm.kernels.grid_update import (
 def update_grid_momentum(
     particles: ParticleSet,
     grid: BackgroundGrid,
-    interpolation: Quad4Interpolation,
+    interpolation: Quad4Interpolation | GIMPInterpolation,
     dt: float,
     *,
     gravity=(0.0, 0.0),
@@ -36,8 +37,8 @@ def update_grid_momentum(
     ----------
     particles, grid : ParticleSet, BackgroundGrid
         Stage-1 2D objects. ``grid`` must already contain P2G mass/momentum.
-    interpolation : Quad4Interpolation
-        Current Stage-2 shape gradients and node IDs (recompute after motion).
+    interpolation : Quad4Interpolation or GIMPInterpolation
+        Current Stage-2/10 shape gradients and node IDs (recompute after motion).
     dt : float
         Positive finite timestep, seconds in SI.
     gravity : (2,) sequence, optional
@@ -65,8 +66,8 @@ def update_grid_momentum(
         raise TypeError("particles must be a ParticleSet.")
     if not isinstance(grid, BackgroundGrid):
         raise TypeError("grid must be a BackgroundGrid.")
-    if not isinstance(interpolation, Quad4Interpolation):
-        raise TypeError("interpolation must be a Quad4Interpolation.")
+    if not isinstance(interpolation, (Quad4Interpolation, GIMPInterpolation)):
+        raise TypeError("interpolation must be Quad4Interpolation or GIMPInterpolation.")
     if particles.ndim != 2 or grid.ndim != 2:
         raise ValueError("Stage 3B grid update requires 2D particles and grid.")
 
@@ -81,14 +82,16 @@ def update_grid_momentum(
     if acceleration.shape != (2,) or not np.all(np.isfinite(acceleration)):
         raise ValueError("gravity must be a finite length-2 vector.")
 
+    is_gimp = isinstance(interpolation, GIMPInterpolation)
+    n_support = 16 if is_gimp else 4
     n = particles.n_particles
     ids = interpolation.node_ids
     grad = interpolation.gradients
-    if (ids.shape != (n, 4) or ids.dtype != np.int64 or
+    if (ids.shape != (n, n_support) or ids.dtype != np.int64 or
             not ids.flags.c_contiguous or
             np.any(ids < 0) or np.any(ids >= grid.n_nodes)):
         raise ValueError("interpolation.node_ids must be valid contiguous (n,4) int64 IDs.")
-    if (grad.shape != (n, 4, 2) or grad.dtype != np.float64 or
+    if (grad.shape != (n, n_support, 2) or grad.dtype != np.float64 or
             not grad.flags.c_contiguous or not np.all(np.isfinite(grad))):
         raise ValueError("interpolation.gradients must be finite contiguous (n,4,2) float64.")
     if not np.allclose(grad.sum(axis=1), 0.0, rtol=0.0, atol=1e-10):
@@ -104,27 +107,32 @@ def update_grid_momentum(
     if (np.any(cells[:, 0] < 0) or np.any(cells[:, 0] >= grid.n_cells[0]) or
             np.any(cells[:, 1] < 0) or np.any(cells[:, 1] >= grid.n_cells[1])):
         raise ValueError("interpolation.cell_indices are outside the grid.")
-    bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
-    if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
-            np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
-            np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
-        raise ValueError("interpolation.node_ids do not match the current grid connectivity.")
+    if not is_gimp:
+        bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
+        if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
+                np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
+                np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
+            raise ValueError("interpolation.node_ids do not match the current grid connectivity.")
     uv = (particles.position - grid.origin) / grid.cell_size
     tol = 64.0 * np.finfo(np.float64).eps * max(1, *grid.n_cells)
     if (not np.all(np.isfinite(uv)) or
             np.any(np.abs(uv - (cells + local)) > tol)):
         raise ValueError("Interpolation is stale; re-evaluate it after particle motion.")
-    # Checks of geometrical gradients protect against a result from a different
-    # spacing while still leaving full interpolation re-evaluation to Stage 2.
-    from geopympm.kernels.interpolation_quad4 import quad4_kernel
-    expected_ids, _, expected_grad = quad4_kernel(
-        np.ascontiguousarray(cells, dtype=np.int64),
-        np.ascontiguousarray(local, dtype=np.float64),
-        grid.n_cells[0], float(grid.cell_size[0]), float(grid.cell_size[1])
-    )
-    if (not np.array_equal(ids, expected_ids) or
-            not np.allclose(grad, expected_grad, rtol=1e-13, atol=1e-12)):
-        raise ValueError("interpolation.gradients are inconsistent with current grid/particles.")
+    if not is_gimp:
+        # Checks of geometrical gradients protect against a result from a different
+        # spacing while still leaving full interpolation re-evaluation to Stage 2.
+        from geopympm.kernels.interpolation_quad4 import quad4_kernel
+        expected_ids, _, expected_grad = quad4_kernel(
+            np.ascontiguousarray(cells, dtype=np.int64),
+            np.ascontiguousarray(local, dtype=np.float64),
+            grid.n_cells[0], float(grid.cell_size[0]), float(grid.cell_size[1])
+        )
+        if (not np.array_equal(ids, expected_ids) or
+                not np.allclose(grad, expected_grad, rtol=1e-13, atol=1e-12)):
+            raise ValueError("interpolation.gradients are inconsistent with current grid/particles.")
+
+    else:
+        validate_current_gimp(particles, grid, interpolation)
 
     if (particles.volume.shape != (n,) or not np.all(np.isfinite(particles.volume)) or
             np.any(particles.volume <= 0.0)):

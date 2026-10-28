@@ -1,0 +1,98 @@
+{
+  "benchmark": "Stage 10A GIMP sensitivity: domain width, PIC/FLIP, PPC",
+  "reference": "independent infinitesimal 1D dAlembert elastic wave",
+  "baseline": "GeoPyMPM Stage 10A force-driven crossing",
+  "note": "domain_factor != 1 does not tile the material body, so only numerical support sensitivity is assessed",
+  "setup": {
+    "steps": 450,
+    "dt_s": 0.002,
+    "cell_dx_m": 0.25,
+    "ppcs": [
+      2,
+      4,
+      8
+    ],
+    "pics": [
+      0.0,
+      0.1,
+      1.0
+    ],
+    "domain_factors": [
+      0.5,
+      1.0,
+      2.0
+    ]
+  },
+  "n_cases": 36,
+  "n_dynamics_runs": 72,
+  "checks": {
+    "both_methods_run": true,
+    "force_driven_crossings": true,
+    "mass_conserved": true,
+    "axial_momentum_conserved": true,
+    "metrics_finite": true
+  },
+  "default_cases": [
+    {
+      "method": "mpm",
+      "ppc_x": 4,
+      "pic_fraction": 0.0,
+      "domain_factor": 1.0,
+      "domain_ratio_to_cell": 0.0,
+      "domain_tiling": true,
+      "n_particles": 640,
+      "dt_s": 0.002,
+      "steps": 450,
+      "cell_dx_m": 0.25,
+      "total_time_s": 0.9,
+      "drift_cell_crossings": 2240,
+      "rest_cell_crossings": 0,
+      "drift_time_rms_stress_rel_l2": 0.24723812249818805,
+      "rest_time_rms_stress_rel_l2": 0.3368228686742882,
+      "drift_final_stress_rel_l2": 0.412979909654208,
+      "rest_final_stress_rel_l2": 0.46829267425207766,
+      "galilean_final_stress_rel_l2": 0.39196747481217326,
+      "crossing_error_increment_rms_pa": 0.0047857694392925455,
+      "noncrossing_error_increment_rms_pa": 0.007386732735191245,
+      "crossing_active_samples": 568,
+      "noncrossing_active_samples": 72124,
+      "max_mass_relative_error": 0.0,
+      "max_momentum_relative_error": 6.063298011819521e-16,
+      "stress_error_minus_matching_mpm_pct_points": 0.0,
+      "galilean_minus_matching_mpm_pct_points": 0.0
+    },
+    {
+      "method": "gimp",
+      "ppc_x": 4,
+      "pic_fraction": 0.0,
+      "domain_factor": 1.0,
+      "domain_ratio_to_cell": 0.25,
+      "domain_tiling": true,
+      "n_particles": 640,
+      "dt_s": 0.002,
+      "steps": 450,
+      "cell_dx_m": 0.25,
+      "total_time_s": 0.9,
+      "drift_cell_crossings": 2240,
+      "rest_cell_crossings": 0,
+      "drift_time_rms_stress_rel_l2": 0.252813726146405,
+      "rest_time_rms_stress_rel_l2": 0.3348659633430237,
+      "drift_final_stress_rel_l2": 0.4236494209947464,
+      "rest_final_stress_rel_l2": 0.46809878811634575,
+      "galilean_final_stress_rel_l2": 0.38638512598470515,
+      "crossing_error_increment_rms_pa": 0.0062910380653861345,
+      "noncrossing_error_increment_rms_pa": 0.0070861065512639685,
+      "crossing_active_samples": 568,
+      "noncrossing_active_samples": 72124,
+      "max_mass_relative_error": 0.0,
+      "max_momentum_relative_error": 1.0610771520684164e-15,
+      "stress_error_minus_matching_mpm_pct_points": 0.5575603648216965,
+      "galilean_minus_matching_mpm_pct_points": -0.5582348827468109
+    }
+  ],
+  "plots": [
+    "validation/results/stage10a_sensitivity/10A_SENS_stress_vs_domain.png",
+    "validation/results/stage10a_sensitivity/10A_SENS_galilean_vs_pic.png",
+    "validation/results/stage10a_sensitivity/10A_SENS_stress_vs_ppc.png"
+  ]
+}

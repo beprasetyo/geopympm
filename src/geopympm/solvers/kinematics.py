@@ -18,6 +18,7 @@ import numpy as np
 from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
+from geopympm.interpolation.gimp import GIMPInterpolation, validate_current_gimp
 from geopympm.kernels.interpolation_quad4 import quad4_kernel
 from geopympm.kernels.kinematics import particle_kinematics_quad4_kernel
 from geopympm.kernels.kinematics_exponential import particle_kinematics_quad4_exponential_kernel
@@ -41,7 +42,7 @@ class KinematicsResult:
 def update_particle_kinematics(
     particles: ParticleSet,
     grid: BackgroundGrid,
-    interpolation: Quad4Interpolation,
+    interpolation: Quad4Interpolation | GIMPInterpolation,
     dt: float,
     *,
     kinematics_update: str = "euler",
@@ -60,7 +61,7 @@ def update_particle_kinematics(
 
     Uses 2D plane strain (out-of-plane stretch 1): F stored as (n,2,2),
     strain stored as (n,6) with zero incremental zz, yz, xz components.
-    ``domain_size`` (GIMP) is deliberately not updated in this MPM stage.
+    In Stage-10 uGIMP mode ``domain_size`` is deliberately unchanged.
 
     Constraints:
     - Must be called after P2G/grid momentum update and before G2P.
@@ -78,8 +79,8 @@ def update_particle_kinematics(
         raise TypeError("particles must be a ParticleSet.")
     if not isinstance(grid, BackgroundGrid):
         raise TypeError("grid must be a BackgroundGrid.")
-    if not isinstance(interpolation, Quad4Interpolation):
-        raise TypeError("interpolation must be a Quad4Interpolation.")
+    if not isinstance(interpolation, (Quad4Interpolation, GIMPInterpolation)):
+        raise TypeError("interpolation must be Quad4Interpolation or GIMPInterpolation.")
     if particles.ndim != 2 or grid.ndim != 2:
         raise ValueError("Stage 3D requires 2D particles and a 2D background grid.")
     if isinstance(dt, (bool, np.bool_)):
@@ -94,6 +95,8 @@ def update_particle_kinematics(
     if not isinstance(kinematics_update, str) or kinematics_update not in ("euler", "exponential"):
         raise ValueError("kinematics_update must be 'euler' or 'exponential'.")
 
+    is_gimp = isinstance(interpolation, GIMPInterpolation)
+    n_support = 16 if is_gimp else 4
     n = particles.n_particles
     ids = interpolation.node_ids
     grad = interpolation.gradients
@@ -101,14 +104,14 @@ def update_particle_kinematics(
     local = interpolation.local_coordinates
     weights = interpolation.weights
 
-    if (ids.shape != (n, 4) or ids.dtype != np.int64 or
+    if (ids.shape != (n, n_support) or ids.dtype != np.int64 or
             not ids.flags.c_contiguous or np.any(ids < 0) or
             np.any(ids >= grid.n_nodes)):
         raise ValueError("interpolation.node_ids must be valid contiguous (n,4) int64 IDs.")
-    if (grad.shape != (n, 4, 2) or grad.dtype != np.float64 or
+    if (grad.shape != (n, n_support, 2) or grad.dtype != np.float64 or
             not grad.flags.c_contiguous or not np.all(np.isfinite(grad))):
         raise ValueError("interpolation.gradients must be finite contiguous (n,4,2) float64.")
-    if (weights.shape != (n, 4) or weights.dtype != np.float64 or
+    if (weights.shape != (n, n_support) or weights.dtype != np.float64 or
             not np.all(np.isfinite(weights)) or not weights.flags.c_contiguous or
             np.any(weights < 0.0) or not np.allclose(
                 weights.sum(axis=1), 1.0, rtol=0.0, atol=1e-12)):
@@ -127,15 +130,19 @@ def update_particle_kinematics(
     if (not np.all(np.isfinite(uv)) or
             np.any(np.abs(uv - (cells + local)) > tol)):
         raise ValueError("Interpolation is stale; call Stage 3D before G2P motion or re-evaluate.")
-    expected_ids, expected_weights, expected_grad = quad4_kernel(
-        np.ascontiguousarray(cells, dtype=np.int64),
-        np.ascontiguousarray(local, dtype=np.float64),
-        grid.n_cells[0], float(grid.cell_size[0]), float(grid.cell_size[1])
-    )
-    if (not np.array_equal(ids, expected_ids) or
-            not np.allclose(weights, expected_weights, rtol=1e-13, atol=1e-13) or
-            not np.allclose(grad, expected_grad, rtol=1e-13, atol=1e-13)):
-        raise ValueError("Interpolation is inconsistent with current grid geometry.")
+    if not is_gimp:
+        expected_ids, expected_weights, expected_grad = quad4_kernel(
+            np.ascontiguousarray(cells, dtype=np.int64),
+            np.ascontiguousarray(local, dtype=np.float64),
+            grid.n_cells[0], float(grid.cell_size[0]), float(grid.cell_size[1])
+        )
+        if (not np.array_equal(ids, expected_ids) or
+                not np.allclose(weights, expected_weights, rtol=1e-13, atol=1e-13) or
+                not np.allclose(grad, expected_grad, rtol=1e-13, atol=1e-13)):
+            raise ValueError("Interpolation is inconsistent with current grid geometry.")
+
+    else:
+        validate_current_gimp(particles, grid, interpolation)
 
     if (grid.velocity.shape != (grid.n_nodes, 2) or
             not np.all(np.isfinite(grid.velocity))):

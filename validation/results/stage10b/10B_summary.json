@@ -1,0 +1,90 @@
+{
+  "affine_domain_max_abs_error_m": 1.6653345369377348e-16,
+  "wave": {
+    "mpm_drift_0": {
+      "method": "mpm",
+      "drift_m_s": 0.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.24513031985537295,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 8.740523674455214e-16,
+      "mean_domain_x_ratio": 1.0,
+      "max_domain_x_change_m": 0.0,
+      "crossings": 0
+    },
+    "mpm_drift_1": {
+      "method": "mpm",
+      "drift_m_s": 1.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.15316242285695467,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 4.547473508864641e-12,
+      "mean_domain_x_ratio": 1.0,
+      "max_domain_x_change_m": 0.0,
+      "crossings": 480
+    },
+    "gimp_drift_0": {
+      "method": "gimp",
+      "drift_m_s": 0.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.24480172570714753,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 6.072302127968388e-16,
+      "mean_domain_x_ratio": 1.0,
+      "max_domain_x_change_m": 0.0,
+      "crossings": 0
+    },
+    "gimp_drift_1": {
+      "method": "gimp",
+      "drift_m_s": 1.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.1723806684827518,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 2.7284841053187847e-12,
+      "mean_domain_x_ratio": 1.0,
+      "max_domain_x_change_m": 0.0,
+      "crossings": 480
+    },
+    "cpgimp_drift_0": {
+      "method": "cpgimp",
+      "drift_m_s": 0.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.2447027194951699,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 6.59271917076143e-16,
+      "mean_domain_x_ratio": 1.0000000023801854,
+      "max_domain_x_change_m": 0.00040493538746197433,
+      "crossings": 0
+    },
+    "cpgimp_drift_1": {
+      "method": "cpgimp",
+      "drift_m_s": 1.0,
+      "ppc_x": 2,
+      "step": 160,
+      "time_s": 0.32,
+      "stress_relative_l2": 0.17234800443972817,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 0.0,
+      "mean_domain_x_ratio": 0.9999999997709456,
+      "max_domain_x_change_m": 0.0003865903408426796,
+      "crossings": 480
+    }
+  },
+  "checks": {
+    "affine_stretch_exact": true,
+    "all_methods_run": true,
+    "all_stress_finite": true,
+    "force_driven_crossings": true,
+    "mass_conserved": true
+  }
+}

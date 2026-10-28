@@ -41,7 +41,7 @@ def g2p_quad4_kernel(
         for d in range(2):
             v_pic = 0.0
             dv_flip = 0.0
-            for a in range(4):
+            for a in range(node_ids.shape[1]):
                 i = node_ids[p, a]
                 w = weights[p, a]
                 v_pic += w * node_velocity[i, d]

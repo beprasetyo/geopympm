@@ -1,6 +1,6 @@
 """Stage 3A: high-level Particle-to-Grid mass/momentum projection.
 
-Conventional 2D MPM with Stage-2 Quad4 shape weights. This function resets
+2D MPM using either Stage-2 Quad4 or Stage-10 uGIMP shape weights. This function resets
 transient grid data before assembling nodal mass and momentum and recovers
 unconstrained nodal velocity. It does *not* compute nodal forces, apply
 boundary conditions, advance the grid, or move material particles.
@@ -16,6 +16,7 @@ import numpy as np
 from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
+from geopympm.interpolation.gimp import GIMPInterpolation, validate_current_gimp
 from geopympm.kernels.p2g import (
     p2g_mass_momentum_kernel,
     recover_nodal_velocity_kernel,
@@ -25,11 +26,11 @@ from geopympm.kernels.p2g import (
 def particle_to_grid(
     particles: ParticleSet,
     grid: BackgroundGrid,
-    interpolation: Quad4Interpolation,
+    interpolation: Quad4Interpolation | GIMPInterpolation,
 ) -> None:
     """Reset grid, project particle mass/momentum, then recover nodal velocity.
 
-    Requires the current Quad4 interpolation evaluation returned by
+    Requires the current interpolation evaluation returned by
     ``evaluate_quad4(particles, grid)``. It uses one velocity field per grid
     node (single-velocity-field MPM; multimaterial contact is out of scope).
 
@@ -40,17 +41,19 @@ def particle_to_grid(
         raise TypeError("particles must be a ParticleSet.")
     if not isinstance(grid, BackgroundGrid):
         raise TypeError("grid must be a BackgroundGrid.")
-    if not isinstance(interpolation, Quad4Interpolation):
-        raise TypeError("interpolation must be a Quad4Interpolation.")
+    if not isinstance(interpolation, (Quad4Interpolation, GIMPInterpolation)):
+        raise TypeError("interpolation must be Quad4Interpolation or GIMPInterpolation.")
     if particles.ndim != 2 or grid.ndim != 2:
         raise ValueError("Stage 3A P2G requires 2D particles and grid.")
 
+    is_gimp = isinstance(interpolation, GIMPInterpolation)
+    n_support = 16 if is_gimp else 4
     n = particles.n_particles
     ids = interpolation.node_ids
     weights = interpolation.weights
-    if ids.shape != (n, 4) or ids.dtype != np.int64:
+    if ids.shape != (n, n_support) or ids.dtype != np.int64:
         raise ValueError("interpolation.node_ids must have shape (n, 4) and dtype int64.")
-    if weights.shape != (n, 4) or weights.dtype != np.float64:
+    if weights.shape != (n, n_support) or weights.dtype != np.float64:
         raise ValueError("interpolation.weights must have shape (n, 4) and dtype float64.")
     if not np.all(np.isfinite(weights)) or np.any(weights < 0.0) or np.any(weights > 1.0):
         raise ValueError("interpolation.weights must be finite and lie in [0, 1].")
@@ -75,17 +78,21 @@ def particle_to_grid(
         raise ValueError("interpolation.cell_indices contains out-of-range cells.")
     # Ensure that a stale result computed on a different grid cannot silently
     # deposit particle mass/momentum to incorrect (but in-range) node IDs.
-    bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
-    if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
-            np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
-            np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
-        raise ValueError("interpolation.node_ids do not match grid connectivity.")
+    if not is_gimp:
+        bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
+        if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
+                np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
+                np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
+            raise ValueError("interpolation.node_ids do not match grid connectivity.")
     particle_uv = (particles.position - grid.origin) / grid.cell_size
     expected_uv = cells + local
     tolerance = 64.0 * np.finfo(np.float64).eps * max(1, *grid.n_cells)
     if (not np.all(np.isfinite(particle_uv)) or
             np.any(np.abs(particle_uv - expected_uv) > tolerance)):
         raise ValueError("Interpolation is stale or inconsistent; call evaluate_quad4 again.")
+
+    if is_gimp:
+        validate_current_gimp(particles, grid, interpolation)
 
     if (particles.mass.shape != (n,) or not np.all(np.isfinite(particles.mass))
             or np.any(particles.mass <= 0.0)):

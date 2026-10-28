@@ -24,7 +24,7 @@ def assemble_internal_force_quad4_kernel(
         sigma_yy = particle_stress[p, 1]
         sigma_xy = particle_stress[p, 3]
 
-        for a in range(4):
+        for a in range(node_ids.shape[1]):
             i = node_ids[p, a]
             gx = gradients[p, a, 0]
             gy = gradients[p, a, 1]

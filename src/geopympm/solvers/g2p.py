@@ -17,6 +17,8 @@ import numpy as np
 from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import Quad4Interpolation
+from geopympm.interpolation.gimp import GIMPInterpolation, validate_current_gimp, validate_gimp_domain
+from geopympm.interpolation.cpdi import CPDIInterpolation, candidate_cpdi_geometry
 from geopympm.kernels.g2p import g2p_quad4_kernel
 from geopympm.kernels.advection_exponential import affine_exponential_positions_kernel
 
@@ -24,12 +26,13 @@ from geopympm.kernels.advection_exponential import affine_exponential_positions_
 def grid_to_particle(
     particles: ParticleSet,
     grid: BackgroundGrid,
-    interpolation: Quad4Interpolation,
+    interpolation: Quad4Interpolation | GIMPInterpolation,
     dt: float,
     *,
     pic_fraction: float = 1.0,
     advection_update: str = "euler",
     velocity_gradient: np.ndarray | None = None,
+    allow_updated_deformation_gradient: bool = False,
 ) -> None:
     """Advance particle velocity and position from updated grid state.
 
@@ -39,8 +42,8 @@ def grid_to_particle(
         Mutable particle state at time n; velocity and position are overwritten.
     grid : BackgroundGrid
         Nodal mass, updated velocity and acceleration from Stage 3B.
-    interpolation : Quad4Interpolation
-        Stage-2 result computed BEFORE this particle motion, after last movement.
+    interpolation : Quad4Interpolation or GIMPInterpolation
+        Stage-2/10 result computed BEFORE this particle motion, after last movement.
     dt : float
         The same positive time step used in Stage 3B (seconds in SI).
     pic_fraction : float, default 1
@@ -77,8 +80,8 @@ def grid_to_particle(
         raise TypeError("particles must be a ParticleSet.")
     if not isinstance(grid, BackgroundGrid):
         raise TypeError("grid must be a BackgroundGrid.")
-    if not isinstance(interpolation, Quad4Interpolation):
-        raise TypeError("interpolation must be a Quad4Interpolation.")
+    if not isinstance(interpolation, (Quad4Interpolation, GIMPInterpolation)):
+        raise TypeError("interpolation must be Quad4Interpolation or GIMPInterpolation.")
     if particles.ndim != 2 or grid.ndim != 2:
         raise ValueError("Stage 3C G2P requires 2D particles and grid.")
 
@@ -102,17 +105,19 @@ def grid_to_particle(
     ):
         raise ValueError("advection_update must be 'euler' or 'affine_exponential'.")
 
+    is_gimp = isinstance(interpolation, GIMPInterpolation)
+    n_support = 16 if is_gimp else 4
     n = particles.n_particles
     ids = interpolation.node_ids
     w = interpolation.weights
     cells = interpolation.cell_indices
     local = interpolation.local_coordinates
 
-    if (ids.shape != (n, 4) or ids.dtype != np.int64 or
+    if (ids.shape != (n, n_support) or ids.dtype != np.int64 or
             not ids.flags.c_contiguous or np.any(ids < 0) or
             np.any(ids >= grid.n_nodes)):
         raise ValueError("interpolation.node_ids must be valid contiguous (n,4) int64 IDs.")
-    if (w.shape != (n, 4) or w.dtype != np.float64 or
+    if (w.shape != (n, n_support) or w.dtype != np.float64 or
             not w.flags.c_contiguous or not np.all(np.isfinite(w)) or
             np.any(w < 0.0) or np.any(w > 1.0) or
             not np.allclose(w.sum(axis=1), 1.0, rtol=0.0, atol=1e-12)):
@@ -125,26 +130,31 @@ def grid_to_particle(
             np.any(local < 0.0) or np.any(local > 1.0)):
         raise ValueError("interpolation.local_coordinates must lie in [0,1].")
 
-    bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
-    if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
-            np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
-            np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
-        raise ValueError("interpolation.node_ids are inconsistent with the grid.")
-    s = local[:, 0]
-    t = local[:, 1]
-    expected_w = np.column_stack((
-        (1.0 - s) * (1.0 - t),
-        s * (1.0 - t),
-        s * t,
-        (1.0 - s) * t,
-    ))
-    if not np.allclose(w, expected_w, rtol=1e-13, atol=1e-13):
-        raise ValueError("interpolation.weights are inconsistent with local coordinates.")
+    if not is_gimp:
+        bl = cells[:, 1] * (grid.n_cells[0] + 1) + cells[:, 0]
+        if (np.any(ids[:, 0] != bl) or np.any(ids[:, 1] != bl + 1) or
+                np.any(ids[:, 2] != bl + grid.n_cells[0] + 2) or
+                np.any(ids[:, 3] != bl + grid.n_cells[0] + 1)):
+            raise ValueError("interpolation.node_ids are inconsistent with the grid.")
+        s = local[:, 0]
+        t = local[:, 1]
+        expected_w = np.column_stack((
+            (1.0 - s) * (1.0 - t),
+            s * (1.0 - t),
+            s * t,
+            (1.0 - s) * t,
+        ))
+        if not np.allclose(w, expected_w, rtol=1e-13, atol=1e-13):
+            raise ValueError("interpolation.weights are inconsistent with local coordinates.")
     particle_uv = (particles.position - grid.origin) / grid.cell_size
     tolerance = 64.0 * np.finfo(np.float64).eps * max(1, *grid.n_cells)
     if (not np.all(np.isfinite(particle_uv)) or
             np.any(np.abs(particle_uv - (cells + local)) > tolerance)):
         raise ValueError("Interpolation is stale; re-evaluate after particle motion.")
+
+    if is_gimp:
+        validate_current_gimp(particles, grid, interpolation,
+                              allow_updated_f=allow_updated_deformation_gradient)
 
     if (particles.velocity.shape != (n, 2) or
             not np.all(np.isfinite(particles.velocity))):
@@ -176,9 +186,9 @@ def grid_to_particle(
         if (L.shape != (n, 2, 2) or L.dtype != np.float64 or
                 not np.all(np.isfinite(L))):
             raise ValueError("velocity_gradient must be finite float64 (n,2,2).")
-        if (interpolation.gradients.shape != (n,4,2) or
+        if (interpolation.gradients.shape != (n,n_support,2) or
                 not np.all(np.isfinite(interpolation.gradients))):
-            raise ValueError("Quad4 interpolation.gradients must be finite (n,4,2).")
+            raise ValueError("interpolation.gradients must be finite (n,n_support,2).")
         expected_L = np.einsum(
             "pai,paj->pij", grid.velocity[ids], interpolation.gradients,
         )
@@ -210,5 +220,9 @@ def grid_to_particle(
 
     # Correct only roundoff-sized excursions; never clip real particle motion.
     np.clip(new_position, lower, upper, out=new_position)
+    if isinstance(interpolation, CPDIInterpolation):
+        candidate_cpdi_geometry(particles, grid, position=new_position)
+    elif is_gimp:
+        validate_gimp_domain(particles, grid, position=new_position)
     particles.position[:] = new_position
     particles.velocity[:] = new_velocity

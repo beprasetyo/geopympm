@@ -21,7 +21,7 @@ def p2g_mass_momentum_kernel(node_ids, weights, particle_mass, particle_velocity
         mp = particle_mass[p]
         vx = particle_velocity[p, 0]
         vy = particle_velocity[p, 1]
-        for a in range(4):
+        for a in range(node_ids.shape[1]):
             i = node_ids[p, a]
             weighted_mass = weights[p, a] * mp
             node_mass[i] += weighted_mass

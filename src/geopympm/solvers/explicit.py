@@ -1,4 +1,4 @@
-"""Stage 5: integrated, fixed-step 2D explicit MPM baseline.
+"""Integrated, fixed-step 2D explicit MPM with Stage 10 uGIMP/cpGIMP options.
 
 This is an intentionally simple updated-grid-velocity / USL-like cycle:
 
@@ -30,6 +30,9 @@ import numpy as np
 from geopympm.core.grid import BackgroundGrid
 from geopympm.core.particles import ParticleSet
 from geopympm.interpolation.mpm import evaluate_quad4
+from geopympm.interpolation.gimp import evaluate_gimp, validate_gimp_domain
+from geopympm.interpolation.cpgimp import candidate_cpgimp_domain, update_cpgimp_domain
+from geopympm.interpolation.cpdi import (evaluate_cpdi, candidate_cpdi_geometry, update_cpdi_domain)
 from geopympm.materials.linear_elastic import (
     LinearElastic,
     _particle_moduli,
@@ -71,7 +74,7 @@ def _finite_scalar(name: str, value: object, *, strictly_positive: bool = False)
 
 
 class ExplicitMPMSolver:
-    """Combine Stage 2/3A/3B/3D/4/3C into a repeated Quad4 MPM cycle.
+    """Combine Stage 2/3A/3B/3D/4/3C into an explicit MPM/uGIMP cycle.
 
     Parameters
     ----------
@@ -101,6 +104,15 @@ class ExplicitMPMSolver:
         exponential trajectory update. The Stage-9 option uses velocity
         gradient from the same current grid update; velocity PIC/FLIP
         interpolation itself remains unchanged.
+    interpolation : {"mpm", "gimp", "cpgimp", "cpdi"}, default "mpm"
+        Quad4 point MPM, unchanged-domain uGIMP, or classical 2D axis-aligned
+        contiguous-particle GIMP with l_x=l_x0*F_xx and l_y=l_y0*F_yy.
+        Both GIMP modes retain 16 padded node slots and require full domain
+        lengths <= cell_size and full rectangles inside the grid. cpGIMP
+        rejects unsupported stretches/rotations rather than clamping sizes.
+        cpdi uses 2D first-order corner-based parallelograms convected by the
+        full deformation gradient, with 16 corner contributions (duplicates
+        allowed) and no fixed cell-size cap; corners must remain on the grid.
     nodal_external_force : ndarray or None
         Fixed additional (n_nodes,2) nodal forces in N. This is *not* an
         automatically integrated surface-traction boundary condition.
@@ -111,6 +123,9 @@ class ExplicitMPMSolver:
     - BC masks / values on ``grid`` persist across all steps.
     - Transient grid data are reassembled by P2G each step.
     - All particle motion must remain inside the existing background grid.
+      In either GIMP mode, the entire particle interpolation domain must stay inside.
+    - cpGIMP domains remain axis-aligned; CPDI1 handles affine shear/rotation,
+      but does not model curved or fragmented material domains.
     - No damping, contact, plasticity, dynamic grid extension, or FEM transfer.
     - The default Stage-4 stress law is not objective under large rigid rotations;
     select stress_update="corotational" for Stage-7 objective Cauchy stress.
@@ -120,6 +135,7 @@ class ExplicitMPMSolver:
 
     _PARTICLE_MUTABLE = (
         "position", "velocity", "volume", "strain", "stress", "deformation_gradient",
+        "domain_size",
     )
     _GRID_MUTABLE = (
         "mass", "momentum", "velocity", "acceleration", "force_internal", "force_external",
@@ -139,6 +155,7 @@ class ExplicitMPMSolver:
         stress_update: str = "incremental",
         kinematics_update: str = "euler",
         advection_update: str = "euler",
+        interpolation: str = "mpm",
     ) -> None:
         if not isinstance(particles, ParticleSet) or not isinstance(grid, BackgroundGrid):
             raise TypeError("particles must be ParticleSet and grid must be BackgroundGrid.")
@@ -174,6 +191,24 @@ class ExplicitMPMSolver:
         ):
             raise ValueError("advection_update must be 'euler' or 'affine_exponential'.")
         self.advection_update = advection_update
+        if not isinstance(interpolation, str) or interpolation not in ("mpm", "gimp", "cpgimp", "cpdi"):
+            raise ValueError("interpolation must be 'mpm', 'gimp', 'cpgimp', or 'cpdi'.")
+        self.interpolation = interpolation
+        if interpolation in ("gimp", "cpgimp"):
+            validate_gimp_domain(particles, grid)
+        if interpolation == "cpgimp":
+            # The initial state must already use lengths consistent with its
+            # cumulative F. Usually F=I and domain_size==domain_size0.
+            expected_domain = candidate_cpgimp_domain(particles, grid)
+            if not np.allclose(particles.domain_size, expected_domain,
+                               rtol=1e-12, atol=0.0):
+                raise ValueError("cpGIMP initial domain_size must equal "
+                                 "domain_size0*diag(F); initialize a consistent state.")
+
+        if interpolation == "cpdi":
+            _, _, _, widths = candidate_cpdi_geometry(particles, grid)
+            if not np.allclose(particles.domain_size, widths, rtol=1e-12, atol=1e-14):
+                raise ValueError("CPDI initial domain_size must equal the axis-aligned envelope of F*domain_size0.")
 
         if nodal_external_force is None:
             self.nodal_external_force = None
@@ -226,7 +261,11 @@ class ExplicitMPMSolver:
         p_old = {name: getattr(self.particles, name).copy() for name in self._PARTICLE_MUTABLE}
         g_old = {name: getattr(self.grid, name).copy() for name in self._GRID_MUTABLE}
         try:
-            interpolation = evaluate_quad4(self.particles, self.grid)
+            interpolation = (evaluate_cpdi(self.particles, self.grid)
+                             if self.interpolation == "cpdi"
+                             else evaluate_gimp(self.particles, self.grid)
+                             if self.interpolation in ("gimp", "cpgimp")
+                             else evaluate_quad4(self.particles, self.grid))
             particle_to_grid(self.particles, self.grid, interpolation)
             update_grid_momentum(
                 self.particles, self.grid, interpolation, self.dt,
@@ -251,7 +290,18 @@ class ExplicitMPMSolver:
                 advection_update=self.advection_update,
                 velocity_gradient=(kinematics.velocity_gradient
                                    if self.advection_update == "affine_exponential" else None),
+                allow_updated_deformation_gradient=(self.interpolation == "cpdi"),
             )
+            if self.interpolation == "cpgimp":
+                # AFTER G2P: every substep above consumes interpolation
+                # evaluated at (x_n, domain_n). Domain_(n+1) enters the
+                # NEXT step. This validation may raise; solver rollback
+                # restores domain_size, F, volume, position and grid state.
+                update_cpgimp_domain(self.particles, self.grid)
+            if self.interpolation == "cpdi":
+                # Post-advection F and position define next-step CPDI corners.
+                # Full rollback remains active if corners exit the fixed grid.
+                update_cpdi_domain(self.particles, self.grid)
             # End-of-step diagnostics (before incrementing clock).
             p = self.particles
             speeds2 = np.sum(p.velocity ** 2, axis=1)

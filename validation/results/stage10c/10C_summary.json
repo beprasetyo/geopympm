@@ -1,0 +1,56 @@
+{
+  "checks": {
+    "affine_kinematics_exact": true,
+    "domain_geometry_exact": true,
+    "all_four_force_driven_methods_run": true,
+    "mass_conserved": true,
+    "momentum_conserved": true,
+    "cell_crossings_detected": true,
+    "finite_stress_error": true
+  },
+  "affine_max_F_error": 3.1086244689504383e-15,
+  "affine_max_bbox_error": 1.2212453270876722e-15,
+  "wave_final": {
+    "mpm": {
+      "method": "mpm",
+      "drift_m_s": 1.0,
+      "step": 100,
+      "time_s": 0.2,
+      "relative_stress_l2": 0.09552572992487109,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 2.7284841053187847e-12,
+      "crossings": 320
+    },
+    "gimp": {
+      "method": "gimp",
+      "drift_m_s": 1.0,
+      "step": 100,
+      "time_s": 0.2,
+      "relative_stress_l2": 0.10931596035550835,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 1.8189894035458565e-12,
+      "crossings": 320
+    },
+    "cpgimp": {
+      "method": "cpgimp",
+      "drift_m_s": 1.0,
+      "step": 100,
+      "time_s": 0.2,
+      "relative_stress_l2": 0.10929816799996829,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 2.7284841053187847e-12,
+      "crossings": 320
+    },
+    "cpdi": {
+      "method": "cpdi",
+      "drift_m_s": 1.0,
+      "step": 100,
+      "time_s": 0.2,
+      "relative_stress_l2": 0.1201517854949338,
+      "mass_relative_error": 0.0,
+      "momentum_x_absolute_error": 9.094947017729282e-13,
+      "crossings": 320
+    }
+  },
+  "note": "Small-strain wave analytical solution; not a finite-strain shear/runout validation."
+}

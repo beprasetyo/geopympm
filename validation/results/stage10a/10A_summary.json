@@ -1,0 +1,158 @@
+{
+  "benchmark": "GeoPyMPM Stage 10A uGIMP vs point MPM",
+  "scope": "Interp/force and prescribed-kinematics stress diagnostics; not coupled runout validation",
+  "single_particle": {
+    "description": "Prescribed positions, constant stress; not a dynamic solver.",
+    "n_positions": 201,
+    "domain_width_m": 0.5,
+    "max_adjacent_mpm_force_change_n": 20.0,
+    "max_adjacent_gimp_force_change_n": 0.10000000000001563,
+    "max_gimp_exact_domain_error_n": 5.329070518200751e-15,
+    "rms_mpm_vs_domain_force_error_n": 5.759266813480317,
+    "rms_gimp_vs_domain_force_error_n": 2.1561040761603475e-15
+  },
+  "moving_block": {
+    "mpm": {
+      "method": "mpm",
+      "particles": 24,
+      "ppc_x": 4,
+      "steps": 150,
+      "rms_force_error_n": 4.200785640805812,
+      "normalized_rms_force_error": 0.0700130940134302,
+      "max_force_error_n": 7.500000000000014,
+      "max_force_increment_noise_n": 14.460000000000356,
+      "max_stress_drift_pa": 2.7284841053187847e-12,
+      "max_mass_relative_error": 0.0,
+      "max_position_error_m": 5.062616992290714e-14
+    },
+    "gimp": {
+      "method": "gimp",
+      "particles": 24,
+      "ppc_x": 4,
+      "steps": 150,
+      "rms_force_error_n": 2.989441862089954e-12,
+      "normalized_rms_force_error": 4.9824031034832566e-14,
+      "max_force_error_n": 5.488942633746774e-12,
+      "max_force_increment_noise_n": 3.822719918389339e-12,
+      "max_stress_drift_pa": 3.410605131648481e-12,
+      "max_mass_relative_error": 0.0,
+      "max_position_error_m": 5.062616992290714e-14
+    }
+  },
+  "strain_driven_stress": {
+    "mpm": {
+      "method": "mpm",
+      "steps": 160,
+      "dt_s": 0.005,
+      "start_x_m": 1.7,
+      "end_x_m": 2.1850099036331936,
+      "reference_end_x_m": 2.185228808391458,
+      "rms_stress_error_pa": 565.7465589895709,
+      "max_abs_stress_error_pa": 1045.5771260600104,
+      "rms_stress_increment_error_pa": 7.027209292106724,
+      "max_stress_increment_error_pa": 9.018867825316192,
+      "particle_crossed_x2": true,
+      "max_mass_relative_error": 0.0
+    },
+    "gimp": {
+      "method": "gimp",
+      "steps": 160,
+      "dt_s": 0.005,
+      "start_x_m": 1.7,
+      "end_x_m": 2.1850055184712454,
+      "reference_end_x_m": 2.185228808391458,
+      "rms_stress_error_pa": 597.9763308030399,
+      "max_abs_stress_error_pa": 1085.725789196962,
+      "rms_stress_increment_error_pa": 7.09358638917018,
+      "max_stress_increment_error_pa": 9.018867825316192,
+      "particle_crossed_x2": true,
+      "max_mass_relative_error": 0.0
+    }
+  },
+  "force_driven_wave": {
+    "mpm": {
+      "method": "mpm",
+      "n_particles": 192,
+      "nx": 24,
+      "ny": 2,
+      "steps": 300,
+      "dt_s": 0.001,
+      "t_end_s": 0.3,
+      "max_displacement_relative_l2": 0.0038459799768136406,
+      "max_stress_relative_l2": 0.06046323929823305,
+      "final_stress_relative_l2": 0.06046323929823305,
+      "max_mass_relative_error": 0.0,
+      "driven_by_internal_forces": true,
+      "grid_cell_crossing_not_required": true
+    },
+    "gimp": {
+      "method": "gimp",
+      "n_particles": 192,
+      "nx": 24,
+      "ny": 2,
+      "steps": 300,
+      "dt_s": 0.001,
+      "t_end_s": 0.3,
+      "max_displacement_relative_l2": 0.0038459799768136406,
+      "max_stress_relative_l2": 0.060463239298233065,
+      "final_stress_relative_l2": 0.060463239298233065,
+      "max_mass_relative_error": 0.0,
+      "driven_by_internal_forces": true,
+      "grid_cell_crossing_not_required": true
+    }
+  },
+  "particle_refinement": [
+    {
+      "ppc_x": 2,
+      "method": "mpm",
+      "rms_force_error_n": 8.641909511213488,
+      "max_increment_noise_n": 29.460000000001216
+    },
+    {
+      "ppc_x": 2,
+      "method": "gimp",
+      "rms_force_error_n": 2.376274162886371e-12,
+      "max_increment_noise_n": 4.11404244005098e-12
+    },
+    {
+      "ppc_x": 4,
+      "method": "mpm",
+      "rms_force_error_n": 4.200785640805812,
+      "max_increment_noise_n": 14.460000000000356
+    },
+    {
+      "ppc_x": 4,
+      "method": "gimp",
+      "rms_force_error_n": 2.989441862089954e-12,
+      "max_increment_noise_n": 3.822719918389339e-12
+    },
+    {
+      "ppc_x": 8,
+      "method": "mpm",
+      "rms_force_error_n": 2.150255798736602,
+      "max_increment_noise_n": 6.960000000000353
+    },
+    {
+      "ppc_x": 8,
+      "method": "gimp",
+      "rms_force_error_n": 2.751154227851297e-12,
+      "max_increment_noise_n": 3.645084234449314e-12
+    }
+  ],
+  "plots_created": true,
+  "checks": {
+    "single_particle_domain_averaging": true,
+    "single_particle_continuity_improvement": true,
+    "moving_block_gimp_matches_exact": true,
+    "moving_block_gimp_less_force_error": true,
+    "moving_block_stress_invariant": true,
+    "moving_block_motion_invariant": true,
+    "prescribed_stress_grid_crossing": true,
+    "stress_evolves_under_prescribed_strain": true,
+    "stress_stays_finite": true,
+    "force_driven_wave_stress_accuracy": true,
+    "force_driven_wave_mass_conservation": true,
+    "refinement_gimp_force_exact": true
+  },
+  "passed": true
+}
