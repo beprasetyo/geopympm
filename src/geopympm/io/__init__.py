@@ -7,6 +7,9 @@ from .time_series import SeriesFrame, write_time_series
 from .output_manager import OutputManager
 from .checkpoint import CheckpointRecord, write_checkpoint, inspect_checkpoint
 from .restart import load_checkpoint, restore_output_manager
+from .recovery import (CheckpointIssue, CheckpointInventory, RecoveryResult,
+                       RetentionReport, CheckpointRecoveryError,
+                       scan_checkpoints, recover_latest_checkpoint, prune_checkpoints)
 
 __all__ = [
     'DEFAULT_FIELDS', 'write_particles_vtu',
@@ -15,4 +18,7 @@ __all__ = [
     'SeriesFrame', 'write_time_series', 'OutputManager',
     'CheckpointRecord', 'write_checkpoint', 'inspect_checkpoint',
     'load_checkpoint', 'restore_output_manager',
+    'CheckpointIssue', 'CheckpointInventory', 'RecoveryResult',
+    'RetentionReport', 'CheckpointRecoveryError',
+    'scan_checkpoints', 'recover_latest_checkpoint', 'prune_checkpoints',
 ]

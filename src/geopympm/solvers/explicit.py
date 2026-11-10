@@ -1,13 +1,13 @@
 """Integrated, fixed-step 2D explicit MPM with Stage 10 uGIMP/cpGIMP options.
 
-This is an intentionally simple updated-grid-velocity / USL-like cycle:
+Default: legacy updated-grid-velocity / USL-like cycle:
 
     interpolate at x_n -> P2G -> grid force/momentum update
     -> particle kinematics -> elastic stress -> G2P -> advance time.
 
 The kinematic and stress calculations use updated nodal velocities, but
-interpolation gradients are evaluated at the *old* particle positions. It
-is NOT a full MUSL implementation. By default plane-strain stresses use the Stage-4 non-objective law for
+interpolation gradients are evaluated at the *old* particle positions. Stage 12 additionally provides explicit USF and MUSL options. The default
+USL-like branch is unchanged for numerical backward compatibility. By default plane-strain stresses use the Stage-4 non-objective law for
 regression compatibility. Stage-7 corotational stresses are available with
 ``stress_update="corotational"``. Stage-8 optionally uses exponential-map F integration, but
 Stage-9 affine-exponential advection can be selected explicitly; neither
@@ -39,10 +39,13 @@ from geopympm.materials.linear_elastic import (
     update_linear_elastic_stress,
 )
 from geopympm.materials.objective_elastic import update_objective_linear_elastic_stress
+from geopympm.materials.neo_hookean import CompressibleNeoHookean, update_neo_hookean_stress
+from geopympm.materials.registry import material_family, particle_wave_moduli
 from .p2g import particle_to_grid
 from .grid_update import update_grid_momentum
 from .kinematics import update_particle_kinematics
 from .g2p import grid_to_particle
+from .momentum_remap import remap_updated_particle_momentum
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +83,8 @@ class ExplicitMPMSolver:
     ----------
     particles, grid : ParticleSet, BackgroundGrid
         Existing 2D Stage-1 data containers. The solver mutates both in place.
-    materials : LinearElastic or mapping {nonnegative material_id: LinearElastic}
-        Stage-4 isotropic plane-strain material law(s).
+    materials : LinearElastic or CompressibleNeoHookean, or homogeneous model-ID mapping
+        Plane-strain material law(s); mixing the two model classes is not yet supported.
     dt : float
         Fixed positive timestep (s). Rechecked each step against CFL estimate.
     pic_fraction : float, default 1
@@ -91,10 +94,11 @@ class ExplicitMPMSolver:
         This is a practical screening estimate, not a stability guarantee.
     gravity : tuple[float, float], default (0,0)
         Constant acceleration (m/s^2).
-    stress_update : {"incremental", "corotational"}, default "incremental"
+    stress_update : {"incremental", "corotational", "hyperelastic"}, default "incremental"
         Stage-4 legacy or Stage-7 objective in-plane stress integration.
         Default retained to reproduce Stage-6A–6F results. For simulations
-        involving rotation explicitly select "corotational".
+        involving rotation explicitly select "corotational" for LinearElastic.
+        Select "hyperelastic" with CompressibleNeoHookean (uses updated F).
     kinematics_update : {"euler", "exponential"}, default "euler"
         Stage-3D Euler F integration or Stage-8 exponential-map update.
         The latter avoids pure-spin Jacobian drift; G2P position integration
@@ -104,6 +108,10 @@ class ExplicitMPMSolver:
         exponential trajectory update. The Stage-9 option uses velocity
         gradient from the same current grid update; velocity PIC/FLIP
         interpolation itself remains unchanged.
+    scheme : {"usl", "usf", "musl"}, default "usl"
+        Stage 12 update ordering. The default usl retains the entire legacy
+        Stage-11 step path; musl uses an additional updated-momentum remap
+        before calculating particle kinematics and stress.
     interpolation : {"mpm", "gimp", "cpgimp", "cpdi"}, default "mpm"
         Quad4 point MPM, unchanged-domain uGIMP, or classical 2D axis-aligned
         contiguous-particle GIMP with l_x=l_x0*F_xx and l_y=l_y0*F_yy.
@@ -126,7 +134,10 @@ class ExplicitMPMSolver:
       In either GIMP mode, the entire particle interpolation domain must stay inside.
     - cpGIMP domains remain axis-aligned; CPDI1 handles affine shear/rotation,
       but does not model curved or fragmented material domains.
-    - No damping, contact, plasticity, dynamic grid extension, or FEM transfer.
+    - No damping, dedicated contact, plasticity, dynamic grid extension, or FEM transfer.
+    - CNH uses plane strain and the elastic/isothermal Uintah UCNH law. Its
+      CFL estimate uses reference/small-strain wave moduli, not nonlinear
+      tangent bounds; reduce dt and check convergence under large distortion.
     - The default Stage-4 stress law is not objective under large rigid rotations;
     select stress_update="corotational" for Stage-7 objective Cauchy stress.
     - A snapshot of state is made per step for rollback when any substage fails;
@@ -145,7 +156,7 @@ class ExplicitMPMSolver:
         self,
         particles: ParticleSet,
         grid: BackgroundGrid,
-        materials: LinearElastic | Mapping[int, LinearElastic],
+        materials: LinearElastic | CompressibleNeoHookean | Mapping,
         *,
         dt: float,
         pic_fraction: float = 1.0,
@@ -156,6 +167,7 @@ class ExplicitMPMSolver:
         kinematics_update: str = "euler",
         advection_update: str = "euler",
         interpolation: str = "mpm",
+        scheme: str = "usl",
     ) -> None:
         if not isinstance(particles, ParticleSet) or not isinstance(grid, BackgroundGrid):
             raise TypeError("particles must be ParticleSet and grid must be BackgroundGrid.")
@@ -175,13 +187,15 @@ class ExplicitMPMSolver:
             raise ValueError("gravity must be a finite vector of shape (2,).")
         self.gravity = g.copy()
 
-        if not isinstance(materials, (LinearElastic, Mapping)):
-            raise TypeError("materials must be LinearElastic or a material-ID mapping.")
-        # Validate all active material IDs now, before any time stepping.
-        _particle_moduli(particles, materials)
+        # Validate model family and all active IDs before time stepping.
+        family = material_family(particles, materials)
         self.materials = materials
-        if not isinstance(stress_update, str) or stress_update not in ("incremental", "corotational"):
-            raise ValueError("stress_update must be 'incremental' or 'corotational'.")
+        if not isinstance(stress_update, str) or stress_update not in (
+            "incremental", "corotational", "hyperelastic"
+        ):
+            raise ValueError("stress_update must be incremental, corotational, or hyperelastic")
+        if (family == "cnh") != (stress_update == "hyperelastic"):
+            raise ValueError("CNH requires stress_update='hyperelastic'; LinearElastic rejects it")
         self.stress_update = stress_update
         if not isinstance(kinematics_update, str) or kinematics_update not in ("euler", "exponential"):
             raise ValueError("kinematics_update must be 'euler' or 'exponential'.")
@@ -194,6 +208,9 @@ class ExplicitMPMSolver:
         if not isinstance(interpolation, str) or interpolation not in ("mpm", "gimp", "cpgimp", "cpdi"):
             raise ValueError("interpolation must be 'mpm', 'gimp', 'cpgimp', or 'cpdi'.")
         self.interpolation = interpolation
+        if not isinstance(scheme, str) or scheme not in ("usl", "usf", "musl"):
+            raise ValueError("scheme must be 'usl', 'usf', or 'musl'")
+        self.scheme = scheme
         if interpolation in ("gimp", "cpgimp"):
             validate_gimp_domain(particles, grid)
         if interpolation == "cpgimp":
@@ -236,7 +253,7 @@ class ExplicitMPMSolver:
             raise ValueError("Particle masses/volumes must remain finite and positive.")
         if p.velocity.shape != (p.n_particles, 2) or not np.all(np.isfinite(p.velocity)):
             raise ValueError("Particle velocities must remain finite (n_particles,2).")
-        lam, shear = _particle_moduli(p, self.materials)
+        lam, shear = particle_wave_moduli(p, self.materials)
         rho = p.mass / p.volume
         wave2 = (lam + 2.0 * shear) / rho
         if np.any(wave2 <= 0) or not np.all(np.isfinite(wave2)):
@@ -248,6 +265,20 @@ class ExplicitMPMSolver:
         if not math.isfinite(limit) or limit <= 0.0:
             raise ValueError("Computed dt estimate is invalid.")
         return limit
+
+    def _update_material_stress(self, kinematics) -> None:
+        """Apply exactly one constitutive update at the scheme-defined point."""
+        if self.stress_update == "hyperelastic":
+            update_neo_hookean_stress(self.particles, self.materials)
+        elif self.stress_update == "corotational":
+            update_objective_linear_elastic_stress(
+                self.particles, kinematics.strain_increment,
+                kinematics.velocity_gradient, self.materials, self.dt,
+            )
+        else:
+            update_linear_elastic_stress(
+                self.particles, kinematics.strain_increment, self.materials,
+            )
 
     def step(self) -> StepDiagnostics:
         """Advance one fixed time step, with rollback if any operation fails."""
@@ -267,31 +298,65 @@ class ExplicitMPMSolver:
                              if self.interpolation in ("gimp", "cpgimp")
                              else evaluate_quad4(self.particles, self.grid))
             particle_to_grid(self.particles, self.grid, interpolation)
-            update_grid_momentum(
-                self.particles, self.grid, interpolation, self.dt,
-                gravity=self.gravity, nodal_external_force=self.nodal_external_force,
-            )
-            kinematics = update_particle_kinematics(
-                self.particles, self.grid, interpolation, self.dt,
-                kinematics_update=self.kinematics_update,
-            )
-            if self.stress_update == "corotational":
-                update_objective_linear_elastic_stress(
-                    self.particles, kinematics.strain_increment,
-                    kinematics.velocity_gradient, self.materials, self.dt,
+            if self.scheme == "usf":
+                # USF: calculate F/stress using projected pre-force nodal
+                # velocity, then assemble forces using the UPDATED stress.
+                # Enforce prescribed nodal velocities before taking L.
+                bc = self.grid.velocity_bc_mask
+                self.grid.velocity[bc] = self.grid.velocity_bc_value[bc]
+                kinematics = update_particle_kinematics(
+                    self.particles, self.grid, interpolation, self.dt,
+                    kinematics_update=self.kinematics_update,
+                )
+                self._update_material_stress(kinematics)
+                update_grid_momentum(
+                    self.particles, self.grid, interpolation, self.dt,
+                    gravity=self.gravity, nodal_external_force=self.nodal_external_force,
+                    allow_updated_deformation_gradient=(self.interpolation == "cpdi"),
+                )
+                # Affine advection needs the POST-force nodal velocity gradient,
+                # not the pre-force gradient used in the USF stress update.
+                advection_L = (np.ascontiguousarray(np.einsum(
+                    "pai,paj->pij", self.grid.velocity[interpolation.node_ids],
+                    interpolation.gradients)) if self.advection_update == "affine_exponential"
+                    else None)
+                grid_to_particle(
+                    self.particles, self.grid, interpolation, self.dt,
+                    pic_fraction=self.pic_fraction,
+                    advection_update=self.advection_update,
+                    velocity_gradient=advection_L,
+                    allow_updated_deformation_gradient=(self.interpolation == "cpdi"),
                 )
             else:
-                update_linear_elastic_stress(
-                    self.particles, kinematics.strain_increment, self.materials,
+                # Common P2G -> grid update for USL and MUSL.
+                update_grid_momentum(
+                    self.particles, self.grid, interpolation, self.dt,
+                    gravity=self.gravity, nodal_external_force=self.nodal_external_force,
                 )
-            grid_to_particle(
-                self.particles, self.grid, interpolation, self.dt,
-                pic_fraction=self.pic_fraction,
-                advection_update=self.advection_update,
-                velocity_gradient=(kinematics.velocity_gradient
-                                   if self.advection_update == "affine_exponential" else None),
-                allow_updated_deformation_gradient=(self.interpolation == "cpdi"),
-            )
+                if self.scheme == "musl":
+                    # Transfer particle velocities at x_n, but do not yet
+                    # advance positions (which would invalidate interpolation).
+                    grid_to_particle(
+                        self.particles, self.grid, interpolation, self.dt,
+                        pic_fraction=self.pic_fraction, transfer_mode="velocity",
+                    )
+                    # Second P2G: updated particle MOMENTUM, unchanged mass,
+                    # same x_n interpolation. Prescribed grid BCs are reapplied.
+                    remap_updated_particle_momentum(self.particles, self.grid, interpolation)
+                kinematics = update_particle_kinematics(
+                    self.particles, self.grid, interpolation, self.dt,
+                    kinematics_update=self.kinematics_update,
+                )
+                self._update_material_stress(kinematics)
+                grid_to_particle(
+                    self.particles, self.grid, interpolation, self.dt,
+                    pic_fraction=self.pic_fraction,
+                    advection_update=self.advection_update,
+                    velocity_gradient=(kinematics.velocity_gradient
+                                       if self.advection_update == "affine_exponential" else None),
+                    allow_updated_deformation_gradient=(self.interpolation == "cpdi"),
+                    transfer_mode=("position" if self.scheme == "musl" else "both"),
+                )
             if self.interpolation == "cpgimp":
                 # AFTER G2P: every substep above consumes interpolation
                 # evaluated at (x_n, domain_n). Domain_(n+1) enters the

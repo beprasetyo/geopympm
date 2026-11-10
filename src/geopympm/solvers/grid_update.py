@@ -30,6 +30,7 @@ def update_grid_momentum(
     *,
     gravity=(0.0, 0.0),
     nodal_external_force=None,
+    allow_updated_deformation_gradient: bool = False,
 ) -> None:
     """Assemble current forces and advance projected nodal momenta one step.
 
@@ -132,7 +133,8 @@ def update_grid_momentum(
             raise ValueError("interpolation.gradients are inconsistent with current grid/particles.")
 
     else:
-        validate_current_gimp(particles, grid, interpolation)
+        validate_current_gimp(particles, grid, interpolation,
+                              allow_updated_f=allow_updated_deformation_gradient)
 
     if (particles.volume.shape != (n,) or not np.all(np.isfinite(particles.volume)) or
             np.any(particles.volume <= 0.0)):

@@ -25,3 +25,18 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# Simulation outputs
+/results/
+/validation/results/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Pytest cache
+.pytest_cache/
+
+# Numba cache
+*.nbc
+*.nbi

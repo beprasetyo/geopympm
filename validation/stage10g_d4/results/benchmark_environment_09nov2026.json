@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-09",
+  "baseline": "10G-D3 (10G-C + patches D1/D2/D3)",
+  "comparison": "10G-D4 with Float64 VTU serializer optimization",
+  "environment": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "python": "3.13.5 (main, Jul 15 2026, 20:25:40) [GCC 14.2.0]",
+    "numpy": "2.3.5",
+    "numba": "0.65.1",
+    "cpu_count": 5
+  },
+  "profile_settings": {
+    "methods": [
+      "mpm",
+      "cpdi"
+    ],
+    "sizes": [
+      32
+    ],
+    "steps": 6,
+    "repeats": 3,
+    "profile_steps": 3,
+    "skip_vtk": false
+  },
+  "notes": [
+    "Results produced sequentially in a shared execution container.",
+    "Source before and after differs only in vtk_writer.py.",
+    "Baseline and D4 timings are not randomized or interleaved; OS cache and load may affect results.",
+    "Synthetic 2D LinearElastic near-static case, not validated slope-failure physics.",
+    "No numerical solver optimization is claimed.",
+    "VTU output byte-identical for seven 1024-particle synthetic MPM/GIMP/CPDI files."
+  ]
+}

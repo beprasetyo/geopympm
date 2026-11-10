@@ -5,8 +5,9 @@ A checkpoint consists of ``state_XXXXXXXX.npz`` (numeric arrays only) and
 last and acts as the commit marker. B1 deliberately DOES NOT reconstruct a
 solver; that is the responsibility of Stage 10G-B2.
 
-Only the Stage-10G-A3 schema is supported. Unknown state is rejected rather
-than silently omitted. In particular, constitutive internal variables will
+Schema 1 (LinearElastic) is preserved; Stage 11 additionally writes schema 2
+(CompressibleNeoHookean) using the same numeric-array inventory. Unknown state
+is rejected rather than silently omitted. Plastic internal variables will
 need a registered serializer when elastoplastic models are introduced.
 """
 
@@ -28,13 +29,17 @@ import numpy as np
 
 from geopympm.core import BackgroundGrid, ParticleSet
 from geopympm.materials.linear_elastic import LinearElastic, _particle_moduli
+from geopympm.materials.neo_hookean import CompressibleNeoHookean, _particle_cnh_moduli
+from geopympm.materials.registry import material_family
 from geopympm.solvers.explicit import ExplicitMPMSolver
 
 if TYPE_CHECKING:
     from .output_manager import OutputManager
 
 FORMAT = "geopympm-checkpoint"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # Historical LinearElastic checkpoint schema
+CNH_SCHEMA_VERSION = 2  # Stage 11: explicit new material kind, unchanged array inventory
+SCHEME_SCHEMA_VERSION = 3  # Stage 12: USF/MUSL scheme in config; both material families
 
 # Explicit, versioned state manifest. Never silently serialize __dict__ without
 # validating it: new plastic internal arrays require a schema change.
@@ -52,7 +57,7 @@ _GRID_META = ("n_cells", "node_shape", "n_nodes")
 _SOLVER_FIELDS = (
     "particles", "grid", "materials", "dt", "pic_fraction", "cfl",
     "gravity", "nodal_external_force", "stress_update", "kinematics_update",
-    "advection_update", "interpolation", "time", "step_count",
+    "advection_update", "interpolation", "scheme", "time", "step_count",
 )
 _NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
@@ -99,24 +104,31 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
     _reject_extra_attributes(solver, _SOLVER_FIELDS, "ExplicitMPMSolver")
     if p.ndim != 2 or g.ndim != 2:
         raise ValueError("Only Stage-10G 2D MPM is supported")
-    if type(solver.materials) is LinearElastic:
-        material_spec = {"kind": "single", "model": "LinearElastic",
-                         "parameters": {"young_modulus": solver.materials.young_modulus,
-                                        "poisson_ratio": solver.materials.poisson_ratio}}
+    family = material_family(p, solver.materials)
+
+    def one_material(model):
+        if type(model) is LinearElastic:
+            return {"model": "LinearElastic",
+                    "parameters": {"young_modulus": model.young_modulus,
+                                   "poisson_ratio": model.poisson_ratio}}
+        if type(model) is CompressibleNeoHookean:
+            return {"model": "CompressibleNeoHookean",
+                    "parameters": {"bulk_modulus": model.bulk_modulus,
+                                   "shear_modulus": model.shear_modulus}}
+        raise TypeError("Unregistered material in checkpoint")
+
+    if type(solver.materials) in (LinearElastic, CompressibleNeoHookean):
+        material_spec = {"kind": "single", **one_material(solver.materials)}
     elif isinstance(solver.materials, Mapping):
         items = []
         for key, model in sorted(solver.materials.items()):
             if (isinstance(key, (bool, np.bool_)) or not isinstance(key, (int, np.integer))
-                    or not 0 <= int(key) <= np.iinfo(np.int32).max
-                    or type(model) is not LinearElastic):
-                raise TypeError("Only integer-ID LinearElastic materials are checkpointable")
-            items.append({"id": int(key), "model": "LinearElastic",
-                          "parameters": {"young_modulus": model.young_modulus,
-                                         "poisson_ratio": model.poisson_ratio}})
+                    or not 0 <= int(key) <= np.iinfo(np.int32).max):
+                raise TypeError("Only nonnegative int32 material IDs are checkpointable")
+            items.append({"id": int(key), **one_material(model)})
         material_spec = {"kind": "mapping", "items": items}
     else:
         raise TypeError("Unsupported constitutive model; refusing incomplete checkpoint")
-    _particle_moduli(p, solver.materials)
     if (isinstance(solver.step_count, (bool, np.bool_))
             or not isinstance(solver.step_count, (int, np.integer))
             or solver.step_count < 0 or not math.isfinite(float(solver.time))
@@ -192,6 +204,8 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
         "advection_update": solver.advection_update,
         "has_nodal_external_force": ext is not None,
     }
+    if solver.scheme != "usl":
+        config["scheme"] = solver.scheme
     grid = {"n_cells": list(g.n_cells), "node_shape": list(g.node_shape),
             "n_nodes": int(g.n_nodes)}
     return arrays, {"config": config, "materials": material_spec, "grid": grid,
@@ -199,15 +213,52 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
 
 
 def _output_state(manager: "OutputManager", solver: ExplicitMPMSolver) -> dict:
-    # Capture the scheduler, not the actual VTK files. Stage 10G-B2 will
-    # reconstruct the scheduler and existing indexes as a separate task.
+    # Stage 10G-D2 binds every recorded VTU snapshot to this checkpoint.
+    # Read-only verification; files are never rewritten during checkpointing.
     from .output_manager import OutputManager
     if not isinstance(manager, OutputManager):
         raise TypeError("output_manager must be an OutputManager")
     if (manager._last_seen_step != solver.step_count
             or manager._last_seen_time != solver.time):
         raise ValueError("OutputManager must have observed the last committed step")
+
+    # This is a VERSIONED EXTENSION to the schema-1 output_manager metadata,
+    # not a change to the solver/NPZ checkpoint schema. New checkpoints always
+    # include it, even if the output scheduler has not emitted any frame.
+    # Rehash on every checkpoint (no timestamp/size cache can prove integrity).
+    # Filenames originate from OutputManager's validated SeriesFrame objects.
+    from .time_series import render_visit, render_pvd
+    digest_map: dict[str, dict[str, str]] = {}
+    for kind, frames in manager.frames.items():
+        expected_names: set[str] = set()
+        hashes: dict[str, str] = {}
+        for frame in frames:
+            filename = f"{kind}_{frame.step:06d}.vtu"
+            if frame.filename != filename or filename in expected_names:
+                raise ValueError(f"Invalid or duplicate {kind} output frame metadata")
+            expected_names.add(filename)
+            snapshot = manager.directory / filename
+            if snapshot.is_symlink():
+                raise ValueError(f"Refusing symlinked VTU snapshot: {snapshot}")
+            if not snapshot.is_file():
+                raise FileNotFoundError(f"Cannot checkpoint missing VTU snapshot: {snapshot}")
+            hashes[filename] = _hash_file(snapshot)
+        # Prevent publishing a manifest that could not safely be restored.
+        actual_names = {p.name for p in manager.directory.glob(f"{kind}_*.vtu")
+                        if p.is_file()}
+        if actual_names != expected_names:
+            raise ValueError(f"Cannot checkpoint extra/missing {kind} VTU snapshots")
+        for ext, renderer in (("visit", render_visit), ("pvd", render_pvd)):
+            pathname = manager.directory / f"{kind}.{ext}"
+            if frames:
+                if (pathname.is_symlink() or not pathname.is_file()
+                        or pathname.read_bytes() != renderer(frames, manager.directory)):
+                    raise ValueError(f"Cannot checkpoint inconsistent {kind}.{ext} index")
+            elif pathname.exists():
+                raise ValueError(f"Cannot checkpoint unexpected {kind}.{ext} index")
+        digest_map[kind] = hashes
     return {
+        "vtu_integrity": {"version": 1, "algorithm": "sha256", "files": digest_map},
         "directory": str(manager.directory),
         "enabled": list(manager.enabled),
         "every_n_steps": manager.every_n_steps,
@@ -274,7 +325,10 @@ def write_checkpoint(
         }
         manifest = {
             "format": FORMAT,
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": (SCHEME_SCHEMA_VERSION if solver.scheme != "usl" else
+                               CNH_SCHEMA_VERSION if state["materials"].get("model") == "CompressibleNeoHookean"
+                               or any(m.get("model") == "CompressibleNeoHookean" for m in state["materials"].get("items", []))
+                               else SCHEMA_VERSION),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "step": int(solver.step_count),
             "time": float(solver.time),
@@ -326,9 +380,27 @@ def inspect_checkpoint(manifest_path: str | os.PathLike[str], *, verify: bool = 
     path = Path(manifest_path)
     with path.open("r", encoding="utf-8") as stream:
         manifest = json.load(stream)
-    if (not isinstance(manifest, dict) or manifest.get("format") != FORMAT
-            or manifest.get("schema_version") != SCHEMA_VERSION):
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        raise ValueError("Unsupported checkpoint format")
+    version = manifest.get("schema_version")
+    spec = manifest.get("materials")
+    if version not in (SCHEMA_VERSION, CNH_SCHEMA_VERSION, SCHEME_SCHEMA_VERSION) or type(version) is not int:
         raise ValueError("Unsupported or invalid checkpoint manifest version")
+    if not isinstance(spec, dict):
+        raise ValueError("Checkpoint material specification is missing")
+    models = ([spec.get("model")] if spec.get("kind") == "single" else
+              [m.get("model") for m in spec.get("items", []) if isinstance(m, dict)]
+              if spec.get("kind") == "mapping" and isinstance(spec.get("items"), list)
+              else [])
+    if not models or (version == SCHEMA_VERSION and any(m != "LinearElastic" for m in models)) \
+            or (version == CNH_SCHEMA_VERSION and any(m != "CompressibleNeoHookean" for m in models)):
+        raise ValueError("Checkpoint material/schema version mismatch: version 1 requires LinearElastic; version 2 requires CompressibleNeoHookean")
+    config = manifest.get("config")
+    if version == SCHEME_SCHEMA_VERSION:
+        if not isinstance(config, dict) or config.get("scheme") not in ("usf", "musl"):
+            raise ValueError("Stage 12 schema 3 requires USF/MUSL scheme metadata")
+    elif isinstance(config, dict) and "scheme" in config:
+        raise ValueError("Legacy schema must not contain a Stage 12 scheme field")
     filename = manifest.get("data_file")
     if (not isinstance(filename, str) or Path(filename).name != filename
             or filename != path.stem + ".npz"):

@@ -1,8 +1,8 @@
 """Stage 10G-B2: validated restart from Stage 10G-B1 checkpoints.
 
-The checkpoint manifest is the commit marker. Reconstruction strictly accepts
-schema 1 (2D, LinearElastic) and fails closed on incompatible dimensions,
-material specifications or state arrays. No constitutive/solver kernels change.
+The checkpoint manifest is the commit marker. Reconstruction accepts
+schema 1 (2D LinearElastic) and schema 2 (2D CompressibleNeoHookean) and fails
+closed on incompatible dimensions, material specifications or state arrays.
 
 Two independent operations are offered:
     solver = load_checkpoint('state_00000006.json')
@@ -19,14 +19,16 @@ from collections.abc import Mapping
 import math
 import os
 from pathlib import Path
+import re
 
 import numpy as np
 
 from geopympm.core import BackgroundGrid, ParticleSet
 from geopympm.materials.linear_elastic import LinearElastic
+from geopympm.materials.neo_hookean import CompressibleNeoHookean
 from geopympm.solvers.explicit import ExplicitMPMSolver
 from .checkpoint import (
-    _PARTICLE_FIELDS, _GRID_FIELDS, _collect_state, inspect_checkpoint,
+    _PARTICLE_FIELDS, _GRID_FIELDS, _collect_state, _hash_file, inspect_checkpoint,
 )
 from .output_manager import OutputManager
 from .time_series import SeriesFrame, render_visit, render_pvd
@@ -65,18 +67,25 @@ def _validate_checkpoint_identity(meta: dict) -> tuple[int, float, int, tuple[in
     return step, float(time), count, (nx, ny)
 
 
-def _material_from_spec(spec: object) -> LinearElastic | dict[int, LinearElastic]:
+def _material_from_spec(spec: object) -> LinearElastic | CompressibleNeoHookean | dict:
     if not isinstance(spec, dict) or spec.get("kind") not in ("single", "mapping"):
         raise ValueError("Unsupported material checkpoint kind")
 
-    def _make(entry: object) -> LinearElastic:
-        if (not isinstance(entry, dict) or set(entry) != {"model", "parameters"}
-                or entry["model"] != "LinearElastic"):
-            raise ValueError("Only LinearElastic material checkpoint is supported")
+    def _make(entry: object) -> LinearElastic | CompressibleNeoHookean:
+        if not isinstance(entry, dict) or set(entry) != {"model", "parameters"}:
+            raise ValueError("Invalid material checkpoint")
         p = entry["parameters"]
-        if not isinstance(p, dict) or set(p) != {"young_modulus", "poisson_ratio"}:
-            raise ValueError("Invalid LinearElastic material parameters")
-        return LinearElastic(p["young_modulus"], p["poisson_ratio"])
+        if not isinstance(p, dict):
+            raise ValueError("Invalid material checkpoint parameters")
+        if entry["model"] == "LinearElastic":
+            if set(p) != {"young_modulus", "poisson_ratio"}:
+                raise ValueError("Invalid LinearElastic material parameters")
+            return LinearElastic(p["young_modulus"], p["poisson_ratio"])
+        if entry["model"] == "CompressibleNeoHookean":
+            if set(p) != {"bulk_modulus", "shear_modulus"}:
+                raise ValueError("Invalid CNH material parameters")
+            return CompressibleNeoHookean(p["bulk_modulus"], p["shear_modulus"])
+        raise ValueError("Unsupported material checkpoint model")
 
     if spec["kind"] == "single":
         if set(spec) != {"kind", "model", "parameters"}:
@@ -84,7 +93,7 @@ def _material_from_spec(spec: object) -> LinearElastic | dict[int, LinearElastic
         return _make({"model": spec["model"], "parameters": spec["parameters"]})
     if set(spec) != {"kind", "items"} or not isinstance(spec["items"], list) or not spec["items"]:
         raise ValueError("Invalid material mapping in checkpoint")
-    materials: dict[int, LinearElastic] = {}
+    materials: dict[int, LinearElastic | CompressibleNeoHookean] = {}
     for item in spec["items"]:
         if not isinstance(item, dict) or set(item) != {"id", "model", "parameters"}:
             raise ValueError("Invalid material mapping entry")
@@ -123,7 +132,9 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
     g_spec = meta["grid"]
     nn = g_spec["n_nodes"]
     config = meta.get("config")
-    if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
+    schema_version = meta["schema_version"]
+    expected_keys = (_CONFIG_KEYS | {"scheme"}) if schema_version == 3 else _CONFIG_KEYS
+    if not isinstance(config, dict) or set(config) != expected_keys:
         raise ValueError("Invalid checkpoint solver configuration")
     if type(config["has_nodal_external_force"]) is not bool:
         raise ValueError("Invalid nodal external force presence flag")
@@ -187,6 +198,7 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
         kinematics_update=config["kinematics_update"],
         advection_update=config["advection_update"],
         interpolation=config["interpolation"],
+        scheme=config.get("scheme", "usl"),
     )
     solver.step_count = step
     solver.time = time
@@ -208,6 +220,7 @@ def restore_output_manager(
     solver: ExplicitMPMSolver,
     *,
     directory: str | os.PathLike[str] | None = None,
+    allow_unverified_legacy_vtu: bool = False,
 ) -> OutputManager:
     """Resume the *exact* archived VisIt/ParaView series without overwriting it.
 
@@ -215,8 +228,13 @@ def restore_output_manager(
     .visit/.pvd indexes must match the checkpoint's frame lists byte-for-byte;
     an output folder that progressed past the checkpoint is deliberately
     rejected. To resume a branch, copy the checkpoint-era visualization folder
-    and use ``directory=...``. No files are changed by this function.
+    and use ``directory=...``. New D2 checkpoints require SHA-256 verification
+    of every VTU snapshot. To resume older checkpoints WITHOUT VTU hashes,
+    explicitly set ``allow_unverified_legacy_vtu=True`` (unsafe for altered
+    VTU contents). No files are changed by this function.
     """
+    if type(allow_unverified_legacy_vtu) is not bool:
+        raise TypeError("allow_unverified_legacy_vtu must be a bool")
     meta = inspect_checkpoint(manifest_path, verify=True)
     step, time, _, _ = _validate_checkpoint_identity(meta)
     if (not isinstance(solver, ExplicitMPMSolver) or solver.step_count != step
@@ -227,7 +245,8 @@ def restore_output_manager(
         raise ValueError("Checkpoint does not contain OutputManager state")
     expected_keys = {"directory", "enabled", "every_n_steps", "every_dt", "next_time",
                      "fields", "initial_written", "last_seen_step", "last_seen_time", "entries"}
-    if set(state) != expected_keys:
+    has_integrity = "vtu_integrity" in state
+    if set(state) != (expected_keys | {"vtu_integrity"} if has_integrity else expected_keys):
         raise ValueError("Invalid OutputManager checkpoint metadata")
     if state["last_seen_step"] != step or state["last_seen_time"] != time:
         raise ValueError("OutputManager checkpoint is not synchronized with solver")
@@ -307,6 +326,38 @@ def restore_output_manager(
             elif pathname.exists():
                 raise ValueError(f"Unexpected {kind}.{ext} without any frames")
         entries[kind] = frames
+
+    # Fail closed for VTU content integrity. Older B1/B2/C manifests had no
+    # per-file hashes: continuing visualization is opt-in, not silently trusted.
+    if has_integrity:
+        integrity = state["vtu_integrity"]
+        if (not isinstance(integrity, dict)
+                or set(integrity) != {"version", "algorithm", "files"}
+                or type(integrity["version"]) is not int or integrity["version"] != 1
+                or integrity["algorithm"] != "sha256"
+                or not isinstance(integrity["files"], dict)
+                or set(integrity["files"]) != set(enabled)):
+            raise ValueError("Invalid or unsupported VTU integrity metadata")
+        for kind, frames in entries.items():
+            hashes = integrity["files"][kind]
+            expected_names = {f.filename for f in frames}
+            if (not isinstance(hashes, dict) or set(hashes) != expected_names):
+                raise ValueError(f"Missing or extra VTU SHA-256 hashes for {kind}")
+            for filename, expected in hashes.items():
+                if (not isinstance(expected, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
+                    raise ValueError(f"Invalid VTU SHA-256 for {filename}")
+                path = folder / filename
+                if path.is_symlink():
+                    raise ValueError(f"Refusing symlinked VTU snapshot: {path}")
+                if _hash_file(path) != expected:
+                    raise ValueError(f"VTU SHA-256 mismatch: {filename} (modified/corrupted)")
+    elif any(entries.values()) and not allow_unverified_legacy_vtu:
+        raise ValueError(
+            "Legacy checkpoint lacks VTU SHA-256 hashes; restore refused. "
+            "Use allow_unverified_legacy_vtu=True only if the visualizations "
+            "are trusted."
+        )
 
     # Re-create ONLY after all files and scheduling constraints are checked.
     # __init__ intentionally rejects existing series; it is not a restart API.

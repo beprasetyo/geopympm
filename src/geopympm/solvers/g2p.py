@@ -33,8 +33,9 @@ def grid_to_particle(
     advection_update: str = "euler",
     velocity_gradient: np.ndarray | None = None,
     allow_updated_deformation_gradient: bool = False,
+    transfer_mode: str = "both",
 ) -> None:
-    """Advance particle velocity and position from updated grid state.
+    """Advance particle velocity and/or position from updated grid state.
 
     Parameters
     ----------
@@ -76,6 +77,8 @@ def grid_to_particle(
       define appropriate boundary handling in a later physics module.
     - No CFL / critical time-step estimate is provided by this function.
     """
+    if transfer_mode not in ("both", "velocity", "position"):
+        raise ValueError("transfer_mode must be both, velocity, or position")
     if not isinstance(particles, ParticleSet):
         raise TypeError("particles must be a ParticleSet.")
     if not isinstance(grid, BackgroundGrid):
@@ -224,5 +227,7 @@ def grid_to_particle(
         candidate_cpdi_geometry(particles, grid, position=new_position)
     elif is_gimp:
         validate_gimp_domain(particles, grid, position=new_position)
-    particles.position[:] = new_position
-    particles.velocity[:] = new_velocity
+    if transfer_mode in ("both", "position"):
+        particles.position[:] = new_position
+    if transfer_mode in ("both", "velocity"):
+        particles.velocity[:] = new_velocity

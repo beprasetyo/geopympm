@@ -14,6 +14,7 @@ F is embedded in 3D using F_zz=1 (a plane-strain visualization convention).
 from __future__ import annotations
 
 from collections.abc import Iterable
+from io import StringIO
 from pathlib import Path
 import math
 import xml.etree.ElementTree as ET
@@ -129,10 +130,20 @@ def _append_array(parent: ET.Element, name: str | None, data: np.ndarray) -> Non
         raise ValueError("VTK DataArray must have shape (n,) or (n,components)")
     if np.issubdtype(matrix.dtype, np.floating):
         xml_type = "Float64"
-        lines = [" ".join(format(float(x), ".17g") for x in row) for row in matrix]
+        if matrix.shape[0] >= 256:
+            # D4: format large float arrays through NumPy's C-backed formatter.
+            # %.17g preserves the Float64 round-trip precision of format(x, '.17g').
+            # In-memory StringIO avoids a Python list of one string per particle.
+            buffer = StringIO()
+            np.savetxt(buffer, matrix, fmt="%.17g")
+            serialized = "\n" + buffer.getvalue()
+        else:
+            lines = [" ".join(format(float(x), ".17g") for x in row) for row in matrix]
+            serialized = "\n" + "\n".join(lines) + "\n"
     elif np.issubdtype(matrix.dtype, np.integer):
         xml_type = "Int32" if matrix.dtype == np.int32 else ("UInt8" if matrix.dtype == np.uint8 else "Int64")
         lines = [" ".join(str(int(x)) for x in row) for row in matrix]
+        serialized = "\n" + "\n".join(lines) + "\n"
     else:
         raise TypeError(f"Unsupported VTK numerical array dtype {matrix.dtype}")
     attrs = {"type": xml_type, "format": "ascii"}
@@ -143,7 +154,7 @@ def _append_array(parent: ET.Element, name: str | None, data: np.ndarray) -> Non
     if matrix.shape[1] != 1:
         attrs["NumberOfComponents"] = str(matrix.shape[1])
     elem = ET.SubElement(parent, "DataArray", attrs)
-    elem.text = "\n" + "\n".join(lines) + "\n"
+    elem.text = serialized
 
 
 def write_particles_vtu(
