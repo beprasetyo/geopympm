@@ -5,10 +5,10 @@ A checkpoint consists of ``state_XXXXXXXX.npz`` (numeric arrays only) and
 last and acts as the commit marker. B1 deliberately DOES NOT reconstruct a
 solver; that is the responsibility of Stage 10G-B2.
 
-Schema 1 (LinearElastic) is preserved; Stage 11 additionally writes schema 2
-(CompressibleNeoHookean) using the same numeric-array inventory. Unknown state
-is rejected rather than silently omitted. Plastic internal variables will
-need a registered serializer when elastoplastic models are introduced.
+Schema 1 (LinearElastic) and Stage 11/12 schemas 2–3 remain unchanged.
+Stage 13A introduces schema 4 for explicitly declared numeric material-history
+arrays. Unknown material models still require registered serializers and are
+rejected rather than silently omitted.
 """
 
 from __future__ import annotations
@@ -30,7 +30,9 @@ import numpy as np
 from geopympm.core import BackgroundGrid, ParticleSet
 from geopympm.materials.linear_elastic import LinearElastic, _particle_moduli
 from geopympm.materials.neo_hookean import CompressibleNeoHookean, _particle_cnh_moduli
+from geopympm.materials.mohr_coulomb import MohrCoulomb, MC_HISTORY
 from geopympm.materials.registry import material_family
+from geopympm.materials.material_state import MaterialState
 from geopympm.solvers.explicit import ExplicitMPMSolver
 
 if TYPE_CHECKING:
@@ -40,6 +42,10 @@ FORMAT = "geopympm-checkpoint"
 SCHEMA_VERSION = 1  # Historical LinearElastic checkpoint schema
 CNH_SCHEMA_VERSION = 2  # Stage 11: explicit new material kind, unchanged array inventory
 SCHEME_SCHEMA_VERSION = 3  # Stage 12: USF/MUSL scheme in config; both material families
+HISTORY_SCHEMA_VERSION = 4  # Stage 13A: explicit typed material history arrays
+MC_SCHEMA_VERSION = 5  # Stage 13B: MohrCoulomb smooth-face state
+MC_MULTISURFACE_SCHEMA_VERSION = 6  # Stage 13C: MC multisurface flow algorithm provenance
+MC_RETURN_MAPPING_ID = "mohr_coulomb_multisurface_active_set_v1"
 
 # Explicit, versioned state manifest. Never silently serialize __dict__ without
 # validating it: new plastic internal arrays require a schema change.
@@ -58,6 +64,7 @@ _SOLVER_FIELDS = (
     "particles", "grid", "materials", "dt", "pic_fraction", "cfl",
     "gravity", "nodal_external_force", "stress_update", "kinematics_update",
     "advection_update", "interpolation", "scheme", "time", "step_count",
+    "material_state", "_constitutive_adapter",
 )
 _NAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
@@ -105,19 +112,31 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
     if p.ndim != 2 or g.ndim != 2:
         raise ValueError("Only Stage-10G 2D MPM is supported")
     family = material_family(p, solver.materials)
+    if not isinstance(solver.material_state, MaterialState):
+        raise ValueError("Solver material_state must be a MaterialState")
+    solver.material_state.validate(p.n_particles)
+    solver._constitutive_adapter.validate_state(solver.material_state)
 
     def one_material(model):
         if type(model) is LinearElastic:
             return {"model": "LinearElastic",
                     "parameters": {"young_modulus": model.young_modulus,
                                    "poisson_ratio": model.poisson_ratio}}
+        if type(model) is MohrCoulomb:
+            return {"model": "MohrCoulomb", "parameters": {
+                "young_modulus": model.young_modulus,
+                "poisson_ratio": model.poisson_ratio,
+                "cohesion": model.cohesion,
+                "friction_angle_deg": model.friction_angle_deg,
+                "dilation_angle_deg": model.dilation_angle_deg,
+            }}
         if type(model) is CompressibleNeoHookean:
             return {"model": "CompressibleNeoHookean",
                     "parameters": {"bulk_modulus": model.bulk_modulus,
                                    "shear_modulus": model.shear_modulus}}
         raise TypeError("Unregistered material in checkpoint")
 
-    if type(solver.materials) in (LinearElastic, CompressibleNeoHookean):
+    if type(solver.materials) in (LinearElastic, CompressibleNeoHookean, MohrCoulomb):
         material_spec = {"kind": "single", **one_material(solver.materials)}
     elif isinstance(solver.materials, Mapping):
         items = []
@@ -196,6 +215,14 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
         raise ValueError("Invalid solver gravity state")
     arrays["solver.gravity"] = np.array(gravity, order="C", copy=True)
 
+    # History data remain outside ParticleSet. Every declared array is stored
+    # verbatim; manifest schema 4 applies only when there are history fields.
+    history_meta = solver.material_state.metadata()
+    for field in solver.material_state.fields:
+        arrays[f"history.{field.name}"] = np.array(
+            solver.material_state[field.name], order="C", copy=True
+        )
+
     config = {
         "dt": float(solver.dt), "pic_fraction": float(solver.pic_fraction),
         "cfl": float(solver.cfl), "interpolation": solver.interpolation,
@@ -204,12 +231,15 @@ def _collect_state(solver: ExplicitMPMSolver) -> tuple[dict[str, np.ndarray], di
         "advection_update": solver.advection_update,
         "has_nodal_external_force": ext is not None,
     }
-    if solver.scheme != "usl":
+    if solver.scheme != "usl" or history_meta:
         config["scheme"] = solver.scheme
     grid = {"n_cells": list(g.n_cells), "node_shape": list(g.node_shape),
             "n_nodes": int(g.n_nodes)}
-    return arrays, {"config": config, "materials": material_spec, "grid": grid,
-                    "n_particles": int(p.n_particles), "ndim": int(p.ndim)}
+    result = {"config": config, "materials": material_spec, "grid": grid,
+              "n_particles": int(p.n_particles), "ndim": int(p.ndim)}
+    if history_meta:
+        result["material_state"] = history_meta
+    return arrays, result
 
 
 def _output_state(manager: "OutputManager", solver: ExplicitMPMSolver) -> dict:
@@ -276,6 +306,10 @@ def _output_state(manager: "OutputManager", solver: ExplicitMPMSolver) -> dict:
     }
 
 
+def family_is_mc(solver):
+    return material_family(solver.particles, solver.materials) == "mc"
+
+
 def write_checkpoint(
     solver: ExplicitMPMSolver,
     directory: str | os.PathLike[str],
@@ -325,10 +359,13 @@ def write_checkpoint(
         }
         manifest = {
             "format": FORMAT,
-            "schema_version": (SCHEME_SCHEMA_VERSION if solver.scheme != "usl" else
+            "schema_version": (MC_MULTISURFACE_SCHEMA_VERSION if family_is_mc(solver) else
+                               HISTORY_SCHEMA_VERSION if "material_state" in state else
+                               SCHEME_SCHEMA_VERSION if solver.scheme != "usl" else
                                CNH_SCHEMA_VERSION if state["materials"].get("model") == "CompressibleNeoHookean"
                                or any(m.get("model") == "CompressibleNeoHookean" for m in state["materials"].get("items", []))
                                else SCHEMA_VERSION),
+            **({"constitutive_algorithm": MC_RETURN_MAPPING_ID} if family_is_mc(solver) else {}),
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "step": int(solver.step_count),
             "time": float(solver.time),
@@ -384,7 +421,7 @@ def inspect_checkpoint(manifest_path: str | os.PathLike[str], *, verify: bool = 
         raise ValueError("Unsupported checkpoint format")
     version = manifest.get("schema_version")
     spec = manifest.get("materials")
-    if version not in (SCHEMA_VERSION, CNH_SCHEMA_VERSION, SCHEME_SCHEMA_VERSION) or type(version) is not int:
+    if version not in (SCHEMA_VERSION, CNH_SCHEMA_VERSION, SCHEME_SCHEMA_VERSION, HISTORY_SCHEMA_VERSION, MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION) or type(version) is not int:
         raise ValueError("Unsupported or invalid checkpoint manifest version")
     if not isinstance(spec, dict):
         raise ValueError("Checkpoint material specification is missing")
@@ -395,11 +432,36 @@ def inspect_checkpoint(manifest_path: str | os.PathLike[str], *, verify: bool = 
     if not models or (version == SCHEMA_VERSION and any(m != "LinearElastic" for m in models)) \
             or (version == CNH_SCHEMA_VERSION and any(m != "CompressibleNeoHookean" for m in models)):
         raise ValueError("Checkpoint material/schema version mismatch: version 1 requires LinearElastic; version 2 requires CompressibleNeoHookean")
+    if version in (MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION):
+        if any(m != "MohrCoulomb" for m in models):
+            raise ValueError("MC checkpoint schema requires MohrCoulomb material")
+        if version == MC_MULTISURFACE_SCHEMA_VERSION:
+            if manifest.get("constitutive_algorithm") != MC_RETURN_MAPPING_ID:
+                raise ValueError("Unknown Stage 13C constitutive return-mapping algorithm")
+        elif "constitutive_algorithm" in manifest:
+            raise ValueError("Legacy Stage 13B checkpoint has no algorithm metadata")
+    elif any(m == "MohrCoulomb" for m in models):
+        raise ValueError("MohrCoulomb requires checkpoint schema 5 or 6")
+    elif "constitutive_algorithm" in manifest:
+        raise ValueError("Constitutive algorithm metadata requires Stage 13C MC")
     config = manifest.get("config")
+    if version in (HISTORY_SCHEMA_VERSION, MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION):
+        from geopympm.materials.material_state import MaterialState
+        MaterialState.from_metadata(manifest.get("n_particles"), manifest.get("material_state"))
+        if version in (MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION):
+            fields = {item["name"]: tuple(item["component_shape"])
+                      for item in manifest["material_state"]}
+            for req in MC_HISTORY:
+                if fields.get(req.name) != req.component_shape:
+                    raise ValueError("MohrCoulomb checkpoint missing required plastic history")
+        if not isinstance(config, dict) or config.get("scheme") not in ("usl", "usf", "musl"):
+            raise ValueError("Stage 13A schema 4 requires explicit scheme metadata")
+    elif "material_state" in manifest:
+        raise ValueError("Legacy checkpoint may not contain material history metadata")
     if version == SCHEME_SCHEMA_VERSION:
         if not isinstance(config, dict) or config.get("scheme") not in ("usf", "musl"):
             raise ValueError("Stage 12 schema 3 requires USF/MUSL scheme metadata")
-    elif isinstance(config, dict) and "scheme" in config:
+    elif version not in (HISTORY_SCHEMA_VERSION, MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION) and isinstance(config, dict) and "scheme" in config:
         raise ValueError("Legacy schema must not contain a Stage 12 scheme field")
     filename = manifest.get("data_file")
     if (not isinstance(filename, str) or Path(filename).name != filename
@@ -421,6 +483,8 @@ def inspect_checkpoint(manifest_path: str | os.PathLike[str], *, verify: bool = 
     required.add("solver.gravity")
     if manifest.get("config", {}).get("has_nodal_external_force"):
         required.add("solver.nodal_external_force")
+    if version in (HISTORY_SCHEMA_VERSION, MC_SCHEMA_VERSION, MC_MULTISURFACE_SCHEMA_VERSION):
+        required.update(f"history.{entry['name']}" for entry in manifest["material_state"])
     if set(field_manifest) != required:
         raise ValueError("Checkpoint is missing required state or has unknown array fields")
     with np.load(data_file, allow_pickle=False) as archive:

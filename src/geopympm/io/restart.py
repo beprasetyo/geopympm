@@ -1,7 +1,7 @@
 """Stage 10G-B2: validated restart from Stage 10G-B1 checkpoints.
 
 The checkpoint manifest is the commit marker. Reconstruction accepts
-schema 1 (2D LinearElastic) and schema 2 (2D CompressibleNeoHookean) and fails
+schemas 1–4 (including Stage 13A material history) and fails
 closed on incompatible dimensions, material specifications or state arrays.
 
 Two independent operations are offered:
@@ -26,6 +26,8 @@ import numpy as np
 from geopympm.core import BackgroundGrid, ParticleSet
 from geopympm.materials.linear_elastic import LinearElastic
 from geopympm.materials.neo_hookean import CompressibleNeoHookean
+from geopympm.materials.mohr_coulomb import MohrCoulomb
+from geopympm.materials.material_state import MaterialState
 from geopympm.solvers.explicit import ExplicitMPMSolver
 from .checkpoint import (
     _PARTICLE_FIELDS, _GRID_FIELDS, _collect_state, _hash_file, inspect_checkpoint,
@@ -85,6 +87,11 @@ def _material_from_spec(spec: object) -> LinearElastic | CompressibleNeoHookean 
             if set(p) != {"bulk_modulus", "shear_modulus"}:
                 raise ValueError("Invalid CNH material parameters")
             return CompressibleNeoHookean(p["bulk_modulus"], p["shear_modulus"])
+        if entry["model"] == "MohrCoulomb":
+            if set(p) != {"young_modulus", "poisson_ratio", "cohesion",
+                          "friction_angle_deg", "dilation_angle_deg"}:
+                raise ValueError("Invalid MohrCoulomb material parameters")
+            return MohrCoulomb(**p)
         raise ValueError("Unsupported material checkpoint model")
 
     if spec["kind"] == "single":
@@ -133,7 +140,7 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
     nn = g_spec["n_nodes"]
     config = meta.get("config")
     schema_version = meta["schema_version"]
-    expected_keys = (_CONFIG_KEYS | {"scheme"}) if schema_version == 3 else _CONFIG_KEYS
+    expected_keys = (_CONFIG_KEYS | {"scheme"}) if schema_version in (3, 4, 5, 6) else _CONFIG_KEYS
     if not isinstance(config, dict) or set(config) != expected_keys:
         raise ValueError("Invalid checkpoint solver configuration")
     if type(config["has_nodal_external_force"]) is not bool:
@@ -155,6 +162,8 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
         "velocity_bc_value": (nn, 2),
     }
     archive_path = Path(manifest_path).with_name(meta["data_file"])
+    history_state = (MaterialState.from_metadata(n, meta["material_state"])
+                     if schema_version in (4, 5, 6) else MaterialState(n))
     with np.load(archive_path, allow_pickle=False) as archive:
         arrays = {}
         for field in _PARTICLE_FIELDS:
@@ -172,6 +181,14 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
             arrays["solver.nodal_external_force"] = _checked_array(
                 archive, "solver.nodal_external_force", (nn, 2), "float64",
             )
+        for field in history_state.fields:
+            key = f"history.{field.name}"
+            arrays[key] = _checked_array(
+                archive, key, (n, *field.component_shape), "float64",
+            )
+    for field in history_state.fields:
+        history_state[field.name][:] = arrays[f"history.{field.name}"]
+    history_state.validate(n)
 
     # Constructors validate base geometry/material combinations. Then restore
     # every stored ndarray in place, not by assigning aliases to NPZ memory.
@@ -199,6 +216,7 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
         advection_update=config["advection_update"],
         interpolation=config["interpolation"],
         scheme=config.get("scheme", "usl"),
+        material_state=history_state,
     )
     solver.step_count = step
     solver.time = time
@@ -210,7 +228,8 @@ def load_checkpoint(manifest_path: str | os.PathLike[str]) -> ExplicitMPMSolver:
         if not np.array_equal(original, restored[key]):
             raise ValueError(f"Restored solver state differs from checkpoint: {key}")
     if (state["config"] != config or state["materials"] != meta["materials"]
-            or state["grid"] != meta["grid"] or state["n_particles"] != n):
+            or state["grid"] != meta["grid"] or state["n_particles"] != n
+            or state.get("material_state") != meta.get("material_state")):
         raise ValueError("Restored solver configuration differs from checkpoint")
     return solver
 

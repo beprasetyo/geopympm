@@ -33,14 +33,12 @@ from geopympm.interpolation.mpm import evaluate_quad4
 from geopympm.interpolation.gimp import evaluate_gimp, validate_gimp_domain
 from geopympm.interpolation.cpgimp import candidate_cpgimp_domain, update_cpgimp_domain
 from geopympm.interpolation.cpdi import (evaluate_cpdi, candidate_cpdi_geometry, update_cpdi_domain)
-from geopympm.materials.linear_elastic import (
-    LinearElastic,
-    _particle_moduli,
-    update_linear_elastic_stress,
-)
-from geopympm.materials.objective_elastic import update_objective_linear_elastic_stress
-from geopympm.materials.neo_hookean import CompressibleNeoHookean, update_neo_hookean_stress
-from geopympm.materials.registry import material_family, particle_wave_moduli
+from geopympm.materials.linear_elastic import LinearElastic
+from geopympm.materials.neo_hookean import CompressibleNeoHookean
+from geopympm.materials.mohr_coulomb import MohrCoulomb
+from geopympm.materials.registry import material_family
+from geopympm.materials.material_state import MaterialState
+from geopympm.materials.interface import resolve_constitutive_adapter
 from .p2g import particle_to_grid
 from .grid_update import update_grid_momentum
 from .kinematics import update_particle_kinematics
@@ -108,6 +106,10 @@ class ExplicitMPMSolver:
         exponential trajectory update. The Stage-9 option uses velocity
         gradient from the same current grid update; velocity PIC/FLIP
         interpolation itself remains unchanged.
+    material_state : MaterialState or None, default None
+        Optional versioned, per-particle history arrays. Stage 13A does not
+        update user-declared fields for elastic/CNH laws; future plastic laws
+        must declare and explicitly integrate their state variables.
     scheme : {"usl", "usf", "musl"}, default "usl"
         Stage 12 update ordering. The default usl retains the entire legacy
         Stage-11 step path; musl uses an additional updated-momentum remap
@@ -156,7 +158,7 @@ class ExplicitMPMSolver:
         self,
         particles: ParticleSet,
         grid: BackgroundGrid,
-        materials: LinearElastic | CompressibleNeoHookean | Mapping,
+        materials: LinearElastic | CompressibleNeoHookean | MohrCoulomb | Mapping,
         *,
         dt: float,
         pic_fraction: float = 1.0,
@@ -168,6 +170,7 @@ class ExplicitMPMSolver:
         advection_update: str = "euler",
         interpolation: str = "mpm",
         scheme: str = "usl",
+        material_state: MaterialState | None = None,
     ) -> None:
         if not isinstance(particles, ParticleSet) or not isinstance(grid, BackgroundGrid):
             raise TypeError("particles must be ParticleSet and grid must be BackgroundGrid.")
@@ -190,12 +193,24 @@ class ExplicitMPMSolver:
         # Validate model family and all active IDs before time stepping.
         family = material_family(particles, materials)
         self.materials = materials
+        self._constitutive_adapter = resolve_constitutive_adapter(particles, materials)
+        if material_state is None:
+            material_state = MaterialState(
+                particles.n_particles, list(self._constitutive_adapter.history_schema)
+            )
+        if not isinstance(material_state, MaterialState):
+            raise TypeError("material_state must be MaterialState or None")
+        material_state.validate(particles.n_particles)
+        self._constitutive_adapter.validate_state(material_state)
+        self.material_state = material_state
         if not isinstance(stress_update, str) or stress_update not in (
             "incremental", "corotational", "hyperelastic"
         ):
             raise ValueError("stress_update must be incremental, corotational, or hyperelastic")
         if (family == "cnh") != (stress_update == "hyperelastic"):
-            raise ValueError("CNH requires stress_update='hyperelastic'; LinearElastic rejects it")
+            raise ValueError("CNH requires stress_update='hyperelastic'; LinearElastic/MC rejects it")
+        if stress_update not in self._constitutive_adapter.modes:
+            raise ValueError(f"{family} does not support stress_update={stress_update!r}")
         self.stress_update = stress_update
         if not isinstance(kinematics_update, str) or kinematics_update not in ("euler", "exponential"):
             raise ValueError("kinematics_update must be 'euler' or 'exponential'.")
@@ -253,7 +268,7 @@ class ExplicitMPMSolver:
             raise ValueError("Particle masses/volumes must remain finite and positive.")
         if p.velocity.shape != (p.n_particles, 2) or not np.all(np.isfinite(p.velocity)):
             raise ValueError("Particle velocities must remain finite (n_particles,2).")
-        lam, shear = particle_wave_moduli(p, self.materials)
+        lam, shear = self._constitutive_adapter.wave_moduli(p, self.materials)
         rho = p.mass / p.volume
         wave2 = (lam + 2.0 * shear) / rho
         if np.any(wave2 <= 0) or not np.all(np.isfinite(wave2)):
@@ -267,18 +282,11 @@ class ExplicitMPMSolver:
         return limit
 
     def _update_material_stress(self, kinematics) -> None:
-        """Apply exactly one constitutive update at the scheme-defined point."""
-        if self.stress_update == "hyperelastic":
-            update_neo_hookean_stress(self.particles, self.materials)
-        elif self.stress_update == "corotational":
-            update_objective_linear_elastic_stress(
-                self.particles, kinematics.strain_increment,
-                kinematics.velocity_gradient, self.materials, self.dt,
-            )
-        else:
-            update_linear_elastic_stress(
-                self.particles, kinematics.strain_increment, self.materials,
-            )
+        """Dispatch an in-place constitutive update via the Stage 13A contract."""
+        self._constitutive_adapter.stress_update(
+            self.particles, kinematics, self.materials, self.dt,
+            self.stress_update, self.material_state,
+        )
 
     def step(self) -> StepDiagnostics:
         """Advance one fixed time step, with rollback if any operation fails."""
@@ -288,9 +296,12 @@ class ExplicitMPMSolver:
                 f"dt={self.dt:.6g} exceeds current Stage-5 CFL estimate "
                 f"{dt_limit:.6g}; reduce dt, grid size, or revisit material data."
             )
+        self.material_state.validate(self.particles.n_particles)
+        self._constitutive_adapter.validate_state(self.material_state)
         # Keep old state available if a late stage fails (e.g. particle exits grid).
         p_old = {name: getattr(self.particles, name).copy() for name in self._PARTICLE_MUTABLE}
         g_old = {name: getattr(self.grid, name).copy() for name in self._GRID_MUTABLE}
+        h_old = self.material_state.snapshot()
         try:
             interpolation = (evaluate_cpdi(self.particles, self.grid)
                              if self.interpolation == "cpdi"
@@ -367,6 +378,8 @@ class ExplicitMPMSolver:
                 # Post-advection F and position define next-step CPDI corners.
                 # Full rollback remains active if corners exit the fixed grid.
                 update_cpdi_domain(self.particles, self.grid)
+            # Constitutive arrays must remain valid before the step is committed.
+            self.material_state.validate(self.particles.n_particles)
             # End-of-step diagnostics (before incrementing clock).
             p = self.particles
             speeds2 = np.sum(p.velocity ** 2, axis=1)
@@ -395,6 +408,7 @@ class ExplicitMPMSolver:
                 getattr(self.particles, name)[:] = values
             for name, values in g_old.items():
                 getattr(self.grid, name)[:] = values
+            self.material_state.restore(h_old)
             raise
         self.time = result.time
         self.step_count = result.step
